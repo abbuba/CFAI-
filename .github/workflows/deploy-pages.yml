@@ -3,6 +3,8 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
@@ -18,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -36,7 +40,24 @@ jobs:
           GITHUB_PAGES: "true"
         run: npm run build
 
-      - name: Deploy to gh-pages branch
+      - name: Publish to docs folder (main branch)
+        run: |
+          rm -rf docs
+          cp -r traffic-dashboard/out docs
+
+      - name: Commit and push docs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs
+          if git diff --staged --quiet; then
+            echo "No docs changes to commit"
+          else
+            git commit -m "Deploy site to docs [skip ci]"
+            git push
+          fi
+
+      - name: Publish to gh-pages branch (backup)
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
