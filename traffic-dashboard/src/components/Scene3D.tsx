@@ -14,6 +14,10 @@ import type {
   VehicleType,
 } from "@/types/traffic";
 import { ROAD_IDS, roadAxis, roadNodes } from "@/lib/intersectionLayout";
+import {
+  CAMERA_PRESETS,
+  type CameraPresetId,
+} from "@/lib/cameraPresets";
 
 const NODE_POS: Record<IntersectionId, [number, number]> = {
   A: [-14, -9],
@@ -22,8 +26,7 @@ const NODE_POS: Record<IntersectionId, [number, number]> = {
   D: [14, 9],
 };
 
-const DEFAULT_CAMERA = new THREE.Vector3(0, 28, 24);
-const DEFAULT_TARGET = new THREE.Vector3(0, 0, 0);
+const DEFAULT_TARGET = CAMERA_PRESETS.overview.target.clone();
 const CAMERA_ANIM_SEC = 0.65;
 
 const ROAD_W = 3.4;
@@ -38,18 +41,14 @@ const ACTIVE_EW_Z = -9;
 const ACTIVE_NS_X = -14;
 
 const ROAD_ACTIVE = "#6b6560";
-const ROAD_IDLE = "#ddd6c8";
-const MARK_ACTIVE = "#f5f0e8";
-const MARK_IDLE = "#e8e0d4";
+const ROAD_QUIET = "#b8b0a4";
+const MARK_WARM = "#f5f0e8";
 
-const SIGNAL_NODES: Record<
-  IntersectionId,
-  Axis[] | null
-> = {
+const SIGNAL_NODES: Record<IntersectionId, Axis[]> = {
   A: ["EW", "NS"],
   B: ["EW"],
   C: ["NS"],
-  D: null,
+  D: ["EW", "NS"],
 };
 
 function lightFor(
@@ -129,8 +128,7 @@ function RoadStrip({
   horizontal: boolean;
   active: boolean;
 }) {
-  const asphalt = active ? ROAD_ACTIVE : ROAD_IDLE;
-  const mark = active ? MARK_ACTIVE : MARK_IDLE;
+  const asphalt = active ? ROAD_ACTIVE : ROAD_QUIET;
   const size: [number, number, number] = horizontal
     ? [length, 0.04, ROAD_W]
     : [ROAD_W, 0.04, length];
@@ -143,97 +141,59 @@ function RoadStrip({
     <group position={[x, 0.015, z]}>
       <mesh>
         <boxGeometry args={size} />
-        <meshStandardMaterial
-          color={asphalt}
-          roughness={active ? 0.88 : 0.95}
-          transparent={!active}
-          opacity={active ? 1 : 0.55}
-        />
+        <meshStandardMaterial color={asphalt} roughness={0.88} />
       </mesh>
-      {active && (
-        <>
-          <mesh position={horizontal ? [0, 0.025, -half] : [-half, 0.025, 0]}>
-            <boxGeometry args={edge} />
-            <meshStandardMaterial color={mark} />
-          </mesh>
-          <mesh position={horizontal ? [0, 0.025, half] : [half, 0.025, 0]}>
-            <boxGeometry args={edge} />
-            <meshStandardMaterial color={mark} />
-          </mesh>
-          <mesh position={horizontal ? [0, 0.025, -0.06] : [-0.06, 0.025, 0]}>
-            <boxGeometry
-              args={
-                horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
-              }
-            />
-            <meshStandardMaterial color="#c4a574" transparent opacity={0.7} />
-          </mesh>
-          <mesh position={horizontal ? [0, 0.025, 0.06] : [0.06, 0.025, 0]}>
-            <boxGeometry
-              args={
-                horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
-              }
-            />
-            <meshStandardMaterial color="#c4a574" transparent opacity={0.7} />
-          </mesh>
-        </>
-      )}
+      <mesh position={horizontal ? [0, 0.025, -half] : [-half, 0.025, 0]}>
+        <boxGeometry args={edge} />
+        <meshStandardMaterial color={MARK_WARM} />
+      </mesh>
+      <mesh position={horizontal ? [0, 0.025, half] : [half, 0.025, 0]}>
+        <boxGeometry args={edge} />
+        <meshStandardMaterial color={MARK_WARM} />
+      </mesh>
+      <mesh position={horizontal ? [0, 0.025, -0.06] : [-0.06, 0.025, 0]}>
+        <boxGeometry
+          args={
+            horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
+          }
+        />
+        <meshStandardMaterial color="#c4a574" transparent opacity={0.75} />
+      </mesh>
+      <mesh position={horizontal ? [0, 0.025, 0.06] : [0.06, 0.025, 0]}>
+        <boxGeometry
+          args={
+            horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
+          }
+        />
+        <meshStandardMaterial color="#c4a574" transparent opacity={0.75} />
+      </mesh>
     </group>
   );
-}
-
-function isActiveSegment(roadId: RoadId): boolean {
-  if (roadId === "AB" || roadId === "BA") return true;
-  if (roadId === "AC" || roadId === "CA") return true;
-  return false;
 }
 
 function Roads() {
   return (
     <group>
-      <RoadStrip
-        x={0}
-        z={-9}
-        length={H_EXTENT * 2}
-        horizontal
-        active
-      />
+      <RoadStrip x={0} z={-9} length={H_EXTENT * 2} horizontal active />
       <RoadStrip x={0} z={9} length={H_EXTENT * 2} horizontal active={false} />
-      <RoadStrip
-        x={-14}
-        z={0}
-        length={V_EXTENT * 2}
-        horizontal={false}
-        active
-      />
-      <RoadStrip
-        x={14}
-        z={0}
-        length={V_EXTENT * 2}
-        horizontal={false}
-        active={false}
-      />
+      <RoadStrip x={-14} z={0} length={V_EXTENT * 2} horizontal={false} active />
+      <RoadStrip x={14} z={0} length={V_EXTENT * 2} horizontal={false} active={false} />
 
       {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
         const [x, z] = NODE_POS[id];
-        const active =
-          id === "A" ||
-          id === "B" ||
-          id === "C";
+        const trafficNode = id === "A" || id === "B" || id === "C";
         return (
           <mesh key={id} position={[x, 0.028, z]}>
             <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
             <meshStandardMaterial
-              color={active ? "#5c5752" : ROAD_IDLE}
+              color={trafficNode ? "#5c5752" : ROAD_QUIET}
               roughness={0.85}
-              transparent={!active}
-              opacity={active ? 1 : 0.4}
             />
           </mesh>
         );
       })}
 
-      {ROAD_IDS.filter(isActiveSegment).map((roadId) => {
+      {ROAD_IDS.map((roadId) => {
         const g = roadGeom(roadId);
         const stopD = g.len - 0.85;
         const sx = g.sx + g.ux * stopD;
@@ -248,7 +208,7 @@ function Roads() {
                   : [ROAD_W - 0.5, 0.01, 0.14]
               }
             />
-            <meshStandardMaterial color={MARK_ACTIVE} />
+            <meshStandardMaterial color={MARK_WARM} />
           </mesh>
         );
       })}
@@ -326,14 +286,14 @@ function SignalHead({
         distanceFactor={14}
         style={{ pointerEvents: "none", userSelect: "none" }}
       >
-        <div className="hologram-text min-w-[72px] text-center transition-opacity duration-500">
+        <div className="hologram-text min-w-[78px] text-center transition-opacity duration-500">
           <p
-            className="text-[10px] font-medium leading-tight"
+            className="text-[11px] font-semibold leading-tight"
             style={{ color: tone }}
           >
             {line1}
           </p>
-          <p className="text-[9px] leading-tight text-[#3a3632]/70">{line2}</p>
+          <p className="text-[10px] leading-tight text-[#3a3632]/85">{line2}</p>
         </div>
       </Html>
     </group>
@@ -352,7 +312,6 @@ function Signals({ snapshot }: { snapshot: TrafficSnapshot }) {
     <group>
       {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
         const axes = SIGNAL_NODES[id];
-        if (!axes) return null;
         const [nx, nz] = NODE_POS[id];
 
         return APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
@@ -514,7 +473,7 @@ function buildCorridors(): Corridor[] {
 }
 
 const CORRIDORS = buildCorridors();
-const CAR_GAP = 3.2;
+const CAR_GAP = 2.8;
 /** Distance past the stop line before the car is treated as cleared. */
 const INTERSECTION_CLEAR = PAD + 0.8;
 
@@ -530,13 +489,13 @@ function createCorridorCars(): CorridorCar[] {
   const cars: CorridorCar[] = [];
   CORRIDORS.forEach((corridor, ci) => {
     if (!corridor.active) return;
-    const count = corridor.axis === "EW" ? 9 : 2;
+    const count = corridor.axis === "EW" ? 13 : 3;
     for (let i = 0; i < count; i += 1) {
       cars.push({
         id: `c${ci}-${i}`,
         corridor: ci,
         d: (corridor.len / (count + 1)) * (i + 1),
-        speed: 2.4 + Math.random() * 0.8,
+        speed: 2.8 + Math.random() * 0.6,
         type: "sedan",
       });
     }
@@ -635,28 +594,31 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 }
 
 function NodeMarkers() {
-  const labels: { id: "A" | "B"; sub: string }[] = [
-    { id: "A", sub: "Hub" },
-    { id: "B", sub: "East end" },
+  const labels: { id: IntersectionId; sub: string }[] = [
+    { id: "A", sub: "Junction" },
+    { id: "B", sub: "Busy link" },
+    { id: "C", sub: "Quiet link" },
+    { id: "D", sub: "Empty" },
   ];
 
   return (
     <group>
       {labels.map(({ id, sub }) => {
         const [x, z] = NODE_POS[id];
+        const offsetZ = z < 0 ? -2.6 : 2.6;
         return (
           <Html
             key={id}
-            position={[x, 1.2, z - 2.8]}
+            position={[x, 1.2, z + offsetZ]}
             center
             distanceFactor={14}
             style={{ pointerEvents: "none", userSelect: "none" }}
           >
             <div className="hologram-text text-center">
-              <p className="text-[14px] font-medium tracking-[0.3em] text-[#3a3632]/85">
+              <p className="text-[14px] font-semibold tracking-[0.28em] text-[#3a3632]">
                 {id}
               </p>
-              <p className="text-[9px] tracking-wide text-[#3a3632]/50">{sub}</p>
+              <p className="text-[10px] tracking-wide text-[#3a3632]/75">{sub}</p>
             </div>
           </Html>
         );
@@ -665,11 +627,13 @@ function NodeMarkers() {
   );
 }
 
-function CameraResetAnimator({
-  resetKey,
+function CameraFlyAnimator({
+  flyKey,
+  preset,
   controlsRef,
 }: {
-  resetKey: number;
+  flyKey: number;
+  preset: CameraPresetId;
   controlsRef: RefObject<OrbitControlsImpl | null>;
 }) {
   const { camera } = useThree();
@@ -678,17 +642,22 @@ function CameraResetAnimator({
     elapsed: 0,
     startPos: new THREE.Vector3(),
     startTarget: new THREE.Vector3(),
+    endPos: new THREE.Vector3(),
+    endTarget: new THREE.Vector3(),
   });
 
   useEffect(() => {
-    if (resetKey === 0) return;
+    if (flyKey === 0) return;
+    const end = CAMERA_PRESETS[preset];
     anim.current.active = true;
     anim.current.elapsed = 0;
     anim.current.startPos.copy(camera.position);
     anim.current.startTarget.copy(
       controlsRef.current?.target ?? DEFAULT_TARGET,
     );
-  }, [resetKey, camera, controlsRef]);
+    anim.current.endPos.copy(end.position);
+    anim.current.endTarget.copy(end.target);
+  }, [flyKey, preset, camera, controlsRef]);
 
   useFrame((_, dt) => {
     const controls = controlsRef.current;
@@ -700,12 +669,12 @@ function CameraResetAnimator({
 
     camera.position.lerpVectors(
       anim.current.startPos,
-      DEFAULT_CAMERA,
+      anim.current.endPos,
       ease,
     );
     controls.target.lerpVectors(
       anim.current.startTarget,
-      DEFAULT_TARGET,
+      anim.current.endTarget,
       ease,
     );
     controls.update();
@@ -716,14 +685,18 @@ function CameraResetAnimator({
   return null;
 }
 
+export type { CameraPresetId };
+
 interface Scene3DProps {
   snapshot: TrafficSnapshot;
-  cameraResetKey?: number;
+  cameraFlyKey?: number;
+  cameraPreset?: CameraPresetId;
 }
 
 export default function Scene3D({
   snapshot,
-  cameraResetKey = 0,
+  cameraFlyKey = 0,
+  cameraPreset = "overview",
 }: Scene3DProps) {
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
@@ -741,13 +714,15 @@ export default function Scene3D({
           enablePan
           enableZoom
           enableRotate
-          minDistance={18}
-          maxDistance={55}
-          maxPolarAngle={Math.PI / 2.15}
+          enableDamping
+          dampingFactor={0.08}
+          minDistance={12}
+          maxDistance={65}
           target={[0, 0, 0]}
         />
-        <CameraResetAnimator
-          resetKey={cameraResetKey}
+        <CameraFlyAnimator
+          flyKey={cameraFlyKey}
+          preset={cameraPreset}
           controlsRef={controlsRef}
         />
 
