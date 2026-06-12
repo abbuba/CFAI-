@@ -38,19 +38,21 @@ export default function DecisionPanel({
 }: {
   snapshot: TrafficSnapshot;
 }) {
+  const emergencyActive = snapshot.emergencyTarget !== null;
+
   return (
-    <div className="w-72 rounded-2xl border border-white/10 bg-white/[0.05] p-4 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+    <div className="w-80 rounded-2xl border border-white/10 bg-white/[0.05] p-4 shadow-[0_8px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
       <p className="mb-1 text-[10px] uppercase tracking-[0.3em] text-white/40">
         Signal Decisions
       </p>
       <p className="mb-3 text-[10px] text-white/30">
-        Greedy phase allocation · score = inbound vehicles + queue
+        Greedy allocation every 5s · score = vehicles + queue
       </p>
 
-      {snapshot.mode === "adaptive" ? (
-        <div className="mb-3 flex items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.07] px-3 py-2">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-          <p className="text-[11px] font-medium tracking-wide text-emerald-300">
+      {emergencyActive ? (
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-blue-400/25 bg-blue-400/[0.08] px-3 py-2">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.9)]" />
+          <p className="text-[11px] font-medium tracking-wide text-blue-300">
             GREEN CORRIDOR {"\u2192"} NODE {snapshot.emergencyTarget}
           </p>
         </div>
@@ -58,7 +60,7 @@ export default function DecisionPanel({
         <div className="mb-3 flex items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
           <span className="h-2 w-2 rounded-full bg-white/25" />
           <p className="text-[11px] font-medium tracking-wide text-white/35">
-            EMERGENCY PRIORITY OFF {"\u00b7"} FIXED PLAN
+            NO ACTIVE EMERGENCY
           </p>
         </div>
       )}
@@ -72,7 +74,7 @@ export default function DecisionPanel({
               key={d.id}
               className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors duration-500 ${
                 emergency
-                  ? "border border-emerald-400/25 bg-emerald-400/[0.06]"
+                  ? "border border-blue-400/30 bg-blue-400/[0.07]"
                   : "border border-white/[0.06] bg-white/[0.03]"
               }`}
             >
@@ -92,12 +94,16 @@ export default function DecisionPanel({
               />
 
               <div className="ml-auto text-right">
-                <p className="font-mono text-[10px] leading-4 text-white/55">
-                  {"\u2194"} {d.demandEW} · {"\u2195"} {d.demandNS}
+                <p className="font-mono text-[10px] leading-4 text-white/60">
+                  SCORE {d.score} · G {d.greenDuration}s
+                </p>
+                <p className="font-mono text-[10px] leading-4 text-white/40">
+                  {"\u2194"} {d.demandEW} · {"\u2195"} {d.demandNS} ·{" "}
+                  <span className="text-emerald-300/80">{d.remaining}s left</span>
                 </p>
                 <p
                   className={`text-[9px] uppercase tracking-wider ${
-                    emergency ? "text-emerald-300" : "text-white/35"
+                    emergency ? "text-blue-300" : "text-white/35"
                   }`}
                 >
                   {d.reason}

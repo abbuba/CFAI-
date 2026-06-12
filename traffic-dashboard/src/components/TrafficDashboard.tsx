@@ -7,7 +7,9 @@ import {
   advanceTrafficSnapshot,
   createInitialSnapshot,
 } from "@/lib/trafficSimulator";
+import { AMBULANCE_PATH, roadNodes } from "@/lib/intersectionLayout";
 import DecisionPanel from "@/components/DecisionPanel";
+import type { AmbulanceSpawn } from "@/components/Scene3D";
 
 const Scene3D = dynamic(() => import("@/components/Scene3D"), {
   ssr: false,
@@ -18,28 +20,83 @@ const Scene3D = dynamic(() => import("@/components/Scene3D"), {
   ),
 });
 
+interface LogEvent {
+  id: number;
+  time: string;
+  message: string;
+  kind: "emergency" | "info";
+}
+
+let eventId = 0;
+
+function timeNow(): string {
+  return new Date().toLocaleTimeString("en-US", { hour12: false });
+}
+
 export default function TrafficDashboard() {
   const [snapshot, setSnapshot] = useState<TrafficSnapshot>(() =>
     createInitialSnapshot(),
   );
   const [mode, setMode] = useState<SimMode>("fixed");
+  const [ambulance, setAmbulance] = useState<AmbulanceSpawn | null>(null);
+  const [events, setEvents] = useState<LogEvent[]>([]);
   const modeRef = useRef<SimMode>("fixed");
-  const ambulanceRoadRef = useRef<RoadId>("AC");
+  const ambulanceRoadRef = useRef<RoadId | null>(null);
 
-  const handleAmbulanceRoad = useCallback((road: RoadId) => {
+  const logEvent = useCallback(
+    (message: string, kind: LogEvent["kind"] = "info") => {
+      setEvents((current) =>
+        [
+          { id: (eventId += 1), time: timeNow(), message, kind },
+          ...current,
+        ].slice(0, 6),
+      );
+    },
+    [],
+  );
+
+  const handleAmbulanceRoad = useCallback(
+    (road: RoadId) => {
+      ambulanceRoadRef.current = road;
+      const target = roadNodes(road)[1];
+      logEvent(`Emergency vehicle detected at Intersection ${target}`, "emergency");
+      logEvent(`Signal priority granted \u2192 Node ${target}`, "emergency");
+    },
+    [logEvent],
+  );
+
+  const spawnAmbulance = useCallback(() => {
+    const startSegment = Math.floor(Math.random() * AMBULANCE_PATH.length);
+    const road = AMBULANCE_PATH[startSegment];
     ambulanceRoadRef.current = road;
-  }, []);
+    setAmbulance({ id: Date.now(), startSegment });
+    logEvent(`Ambulance dispatched on road ${road}`, "emergency");
+    const target = roadNodes(road)[1];
+    logEvent(`Emergency vehicle detected at Intersection ${target}`, "emergency");
+    logEvent(`Signal priority granted \u2192 Node ${target}`, "emergency");
+  }, [logEvent]);
+
+  const handleAmbulanceDone = useCallback(() => {
+    setAmbulance(null);
+    ambulanceRoadRef.current = null;
+    logEvent("Ambulance passed \u00b7 normal signal control resumed");
+  }, [logEvent]);
 
   const toggleMode = useCallback(() => {
     setMode((current) => {
       const next: SimMode = current === "fixed" ? "adaptive" : "fixed";
       modeRef.current = next;
+      logEvent(
+        next === "adaptive"
+          ? "Adaptive coordination activated \u00b7 greedy green allocation"
+          : "Reverted to fixed signal timing",
+      );
       setSnapshot((snap) =>
         advanceTrafficSnapshot(snap, ambulanceRoadRef.current, next),
       );
       return next;
     });
-  }, []);
+  }, [logEvent]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -51,10 +108,16 @@ export default function TrafficDashboard() {
   }, []);
 
   const adaptive = mode === "adaptive";
+  const emergencyActive = ambulance !== null;
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#07080c]">
-      <Scene3D snapshot={snapshot} onAmbulanceRoad={handleAmbulanceRoad} />
+      <Scene3D
+        snapshot={snapshot}
+        ambulance={ambulance}
+        onAmbulanceRoad={handleAmbulanceRoad}
+        onAmbulanceDone={handleAmbulanceDone}
+      />
 
       {/* vignette */}
       <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(ellipse_at_center,transparent_55%,rgba(0,0,0,0.45)_100%)]" />
@@ -68,6 +131,18 @@ export default function TrafficDashboard() {
           Adaptive Signal Coordination
         </h1>
       </div>
+
+      {/* emergency override badge */}
+      {emergencyActive && (
+        <div className="absolute left-1/2 top-6 z-20 -translate-x-1/2 animate-pulse rounded-2xl border border-red-400/40 bg-red-500/15 px-5 py-2.5 backdrop-blur-xl">
+          <p className="text-[11px] font-semibold tracking-[0.25em] text-red-300">
+            EMERGENCY OVERRIDE
+            {snapshot.emergencyTarget
+              ? ` \u00b7 NODE ${snapshot.emergencyTarget}`
+              : ""}
+          </p>
+        </div>
+      )}
 
       {/* decision panel */}
       <div className="absolute right-6 top-6 z-20">
@@ -141,22 +216,70 @@ export default function TrafficDashboard() {
         >
           {adaptive ? "BACK TO FIXED TIMING" : "ACTIVATE ADAPTIVE MODE"}
         </button>
+
+        <button
+          type="button"
+          onClick={spawnAmbulance}
+          disabled={emergencyActive}
+          className={`mt-2 w-full rounded-xl border px-4 py-2.5 text-[11px] font-semibold tracking-[0.15em] transition-all duration-300 ${
+            emergencyActive
+              ? "cursor-not-allowed border-red-400/15 bg-red-400/5 text-red-300/40"
+              : "border-red-400/30 bg-red-400/15 text-red-300 hover:bg-red-400/25"
+          }`}
+        >
+          {emergencyActive ? "AMBULANCE ACTIVE" : "SPAWN AMBULANCE"}
+        </button>
+      </div>
+
+      {/* event log */}
+      <div className="absolute bottom-6 left-1/2 z-20 w-[26rem] -translate-x-1/2 rounded-2xl border border-white/10 bg-white/[0.05] p-3.5 backdrop-blur-xl">
+        <p className="mb-2 text-[10px] uppercase tracking-[0.3em] text-white/40">
+          Event Log
+        </p>
+        {events.length === 0 ? (
+          <p className="text-[10px] text-white/25">
+            No events yet — spawn an ambulance or switch modes.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {events.map((event) => (
+              <p
+                key={event.id}
+                className={`font-mono text-[10px] leading-4 ${
+                  event.kind === "emergency" ? "text-blue-300" : "text-white/45"
+                }`}
+              >
+                <span className="text-white/25">{event.time}</span>{" "}
+                {event.message}
+              </p>
+            ))}
+          </div>
+        )}
+        <p className="mt-2 border-t border-white/[0.06] pt-2 text-[9px] tracking-wide text-white/25">
+          Queue · waiting vehicles &nbsp; PriorityQueue · emergency &nbsp; Graph ·
+          road network &nbsp; Greedy · green allocation
+        </p>
       </div>
 
       {/* bottom legend */}
-      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-2.5 backdrop-blur-xl">
-        <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
-          <span className="h-1.5 w-4 rounded-full bg-emerald-400/80" />
-          Low
-        </span>
-        <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
-          <span className="h-1.5 w-4 rounded-full bg-amber-400/80" />
-          Med
-        </span>
-        <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
-          <span className="h-1.5 w-4 rounded-full bg-red-400/80" />
-          High
-        </span>
+      <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-1.5 rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-2.5 backdrop-blur-xl">
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
+            <span className="h-1.5 w-4 rounded-full bg-emerald-400/80" />
+            0{"\u2013"}30
+          </span>
+          <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
+            <span className="h-1.5 w-4 rounded-full bg-amber-400/80" />
+            31{"\u2013"}80
+          </span>
+          <span className="flex items-center gap-1.5 text-[10px] tracking-wide text-white/50">
+            <span className="h-1.5 w-4 rounded-full bg-red-400/80" />
+            81+
+          </span>
+        </div>
+        <p className="text-[9px] tracking-wide text-white/25">
+          vehicles per segment
+        </p>
       </div>
     </div>
   );
