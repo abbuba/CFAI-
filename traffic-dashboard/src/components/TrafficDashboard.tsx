@@ -20,14 +20,18 @@ const Scene3D = dynamic(() => import("@/components/Scene3D"), {
 });
 
 export default function TrafficDashboard() {
-  const [snapshot, setSnapshot] = useState<TrafficSnapshot>(() =>
-    createInitialSnapshot(),
-  );
+  const [mounted, setMounted] = useState(false);
+  const [snapshot, setSnapshot] = useState<TrafficSnapshot | null>(null);
   const [mode, setMode] = useState<SimMode>("fixed");
   const [panelOpen, setPanelOpen] = useState(true);
   const [cameraResetKey, setCameraResetKey] = useState(0);
   const [resetSpin, setResetSpin] = useState(false);
   const modeRef = useRef<SimMode>("fixed");
+
+  useEffect(() => {
+    setSnapshot(createInitialSnapshot());
+    setMounted(true);
+  }, []);
 
   const toggleMode = useCallback(() => {
     setMode((current) => {
@@ -45,13 +49,24 @@ export default function TrafficDashboard() {
   }, []);
 
   useEffect(() => {
+    if (!mounted) return;
     const interval = window.setInterval(() => {
       setSnapshot((current) =>
-        advanceTrafficSnapshot(current, modeRef.current),
+        current
+          ? advanceTrafficSnapshot(current, modeRef.current)
+          : createInitialSnapshot(),
       );
     }, 1000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [mounted]);
+
+  if (!mounted || !snapshot) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#e8e4dc] text-xs font-light tracking-wide text-[#3a3632]/40">
+        Loading
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#e8e4dc]">
