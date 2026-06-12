@@ -8,11 +8,8 @@ import {
   createInitialSnapshot,
   resetSimulation,
 } from "@/lib/trafficSimulator";
-import {
-  CAMERA_PRESETS,
-  type CameraPresetId,
-} from "@/lib/cameraPresets";
 import InfoPanel from "@/components/InfoPanel";
+import DemoNarrator from "@/components/DemoNarrator";
 
 const Scene3D = dynamic(() => import("@/components/Scene3D"), {
   ssr: false,
@@ -23,21 +20,24 @@ const Scene3D = dynamic(() => import("@/components/Scene3D"), {
   ),
 });
 
-const PRESET_ORDER: CameraPresetId[] = ["overview", "nodeA", "nodeB"];
-
 export default function TrafficDashboard() {
   const [mounted, setMounted] = useState(false);
   const [snapshot, setSnapshot] = useState<TrafficSnapshot | null>(null);
   const [mode, setMode] = useState<SimMode>("fixed");
   const [panelOpen, setPanelOpen] = useState(true);
-  const [cameraPreset, setCameraPreset] = useState<CameraPresetId>("overview");
-  const [cameraFlyKey, setCameraFlyKey] = useState(0);
-  const [resetSpin, setResetSpin] = useState(false);
+  const [cameraFlyKey, setCameraFlyKey] = useState(1);
+  const [cameraInstant, setCameraInstant] = useState(true);
+  const [modeSwitchKey, setModeSwitchKey] = useState(1);
   const modeRef = useRef<SimMode>("fixed");
 
   useEffect(() => {
     setSnapshot(createInitialSnapshot());
     setMounted(true);
+  }, []);
+
+  const snapToNodeA = useCallback((instant: boolean) => {
+    setCameraInstant(instant);
+    setCameraFlyKey((k) => k + 1);
   }, []);
 
   const toggleMode = useCallback(() => {
@@ -47,16 +47,9 @@ export default function TrafficDashboard() {
       setSnapshot(resetSimulation(next));
       return next;
     });
-  }, []);
-
-  const flyToPreset = useCallback((preset: CameraPresetId) => {
-    setCameraPreset(preset);
-    setCameraFlyKey((k) => k + 1);
-    if (preset === "overview") {
-      setResetSpin(true);
-      window.setTimeout(() => setResetSpin(false), 650);
-    }
-  }, []);
+    setModeSwitchKey((k) => k + 1);
+    snapToNodeA(true);
+  }, [snapToNodeA]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -78,49 +71,27 @@ export default function TrafficDashboard() {
     );
   }
 
-  const decision = snapshot.decisions[0];
-
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#e8e4dc]">
       <Scene3D
         snapshot={snapshot}
         cameraFlyKey={cameraFlyKey}
-        cameraPreset={cameraPreset}
+        cameraInstant={cameraInstant}
       />
 
-      <div className="absolute bottom-6 left-6 z-20 flex items-center gap-2">
-        <div className="flex items-center gap-1 rounded-full border border-[#ddd6c8]/90 bg-[#f5f0e8]/90 px-1 py-1 shadow-sm">
-          {PRESET_ORDER.map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => flyToPreset(id)}
-              className={`rounded-full px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors duration-200 ${
-                cameraPreset === id
-                  ? "bg-[#3a3632]/12 text-[#3a3632]"
-                  : "text-[#3a3632]/50 hover:text-[#3a3632]/80"
-              }`}
-            >
-              {CAMERA_PRESETS[id].label}
-            </button>
-          ))}
-        </div>
+      <DemoNarrator
+        snapshot={snapshot}
+        mode={mode}
+        modeSwitchKey={modeSwitchKey}
+      />
 
-        <button
-          type="button"
-          onClick={() => flyToPreset("overview")}
-          aria-label="Reset camera view"
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-[#ddd6c8]/90 bg-[#f5f0e8]/90 text-[#3a3632]/55 shadow-sm transition-all duration-300 hover:border-[#c9c0b4] hover:text-[#3a3632] hover:shadow-md"
-        >
-          <span
-            className={`inline-block text-base leading-none transition-transform duration-[650ms] ease-out ${
-              resetSpin ? "rotate-[360deg]" : "rotate-0"
-            }`}
-          >
-            ↻
-          </span>
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={() => snapToNodeA(false)}
+        className="absolute bottom-6 left-6 z-20 rounded-full border border-[#ddd6c8]/90 bg-[#f5f0e8]/90 px-3 py-1.5 text-[10px] font-medium tracking-wide text-[#3a3632]/70 shadow-sm transition-colors hover:text-[#3a3632]"
+      >
+        Back to Node A
+      </button>
 
       <p className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 text-[10px] tracking-wide text-[#3a3632]/40">
         Drag to orbit · scroll to zoom · right-drag to pan
@@ -130,8 +101,6 @@ export default function TrafficDashboard() {
         mode={mode}
         open={panelOpen}
         waitEW={snapshot.stats.waitEW}
-        waitNS={snapshot.stats.waitNS}
-        decision={decision}
         onToggle={() => setPanelOpen((v) => !v)}
         onSwitchMode={toggleMode}
       />

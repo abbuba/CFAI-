@@ -14,10 +14,7 @@ import type {
   VehicleType,
 } from "@/types/traffic";
 import { ROAD_IDS, roadAxis, roadNodes } from "@/lib/intersectionLayout";
-import {
-  CAMERA_PRESETS,
-  type CameraPresetId,
-} from "@/lib/cameraPresets";
+import { NODE_A_CAMERA } from "@/lib/cameraPresets";
 
 const NODE_POS: Record<IntersectionId, [number, number]> = {
   A: [-14, -9],
@@ -26,14 +23,17 @@ const NODE_POS: Record<IntersectionId, [number, number]> = {
   D: [14, 9],
 };
 
-const DEFAULT_TARGET = CAMERA_PRESETS.overview.target.clone();
+const DEFAULT_TARGET = NODE_A_CAMERA.target.clone();
 const CAMERA_ANIM_SEC = 0.65;
 
 const ROAD_W = 3.4;
 const LANE = 0.85;
 const PAD = 2.6;
-const H_EXTENT = 30;
-const V_EXTENT = 21;
+/** Simulation bounds for cars and stop logic. */
+const SIM_EXTENT = 30;
+const V_SIM_EXTENT = 21;
+/** Visual road length — fades into fog. */
+const VISUAL_EXTENT = 140;
 const CAR_NOSE = 1.1;
 
 /** Demo: only bottom EW (A–B) and left NS (A–C) carry traffic. */
@@ -50,6 +50,8 @@ const SIGNAL_NODES: Record<IntersectionId, Axis[]> = {
   C: ["NS"],
   D: ["EW", "NS"],
 };
+
+const ACTIVE_ROAD_IDS: RoadId[] = ["AB", "BA", "AC", "CA"];
 
 function lightFor(
   snapshot: TrafficSnapshot,
@@ -102,16 +104,10 @@ function signalCopy(
 
 function Ground() {
   return (
-    <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
-        <planeGeometry args={[90, 64]} />
-        <meshStandardMaterial color="#f5f0e8" roughness={0.92} />
-      </mesh>
-      <gridHelper
-        args={[120, 48, "#ddd6c8", "#ede8df"]}
-        position={[0, -0.01, 0]}
-      />
-    </group>
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-14, -0.02, -9]}>
+      <planeGeometry args={[320, 320]} />
+      <meshStandardMaterial color="#f5f0e8" roughness={0.92} />
+    </mesh>
   );
 }
 
@@ -174,26 +170,27 @@ function RoadStrip({
 function Roads() {
   return (
     <group>
-      <RoadStrip x={0} z={-9} length={H_EXTENT * 2} horizontal active />
-      <RoadStrip x={0} z={9} length={H_EXTENT * 2} horizontal active={false} />
-      <RoadStrip x={-14} z={0} length={V_EXTENT * 2} horizontal={false} active />
-      <RoadStrip x={14} z={0} length={V_EXTENT * 2} horizontal={false} active={false} />
+      <RoadStrip
+        x={0}
+        z={ACTIVE_EW_Z}
+        length={VISUAL_EXTENT * 2}
+        horizontal
+        active
+      />
+      <RoadStrip
+        x={ACTIVE_NS_X}
+        z={0}
+        length={VISUAL_EXTENT * 2}
+        horizontal={false}
+        active={false}
+      />
 
-      {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
-        const [x, z] = NODE_POS[id];
-        const trafficNode = id === "A" || id === "B" || id === "C";
-        return (
-          <mesh key={id} position={[x, 0.028, z]}>
-            <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
-            <meshStandardMaterial
-              color={trafficNode ? "#5c5752" : ROAD_QUIET}
-              roughness={0.85}
-            />
-          </mesh>
-        );
-      })}
+      <mesh position={[-14, 0.028, -9]}>
+        <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
+        <meshStandardMaterial color="#5c5752" roughness={0.85} />
+      </mesh>
 
-      {ROAD_IDS.map((roadId) => {
+      {ACTIVE_ROAD_IDS.map((roadId) => {
         const g = roadGeom(roadId);
         const stopD = g.len - 0.85;
         const sx = g.sx + g.ux * stopD;
@@ -308,35 +305,34 @@ const APPROACHES: { dx: number; dz: number; axis: Axis }[] = [
 ];
 
 function Signals({ snapshot }: { snapshot: TrafficSnapshot }) {
+  const id: IntersectionId = "A";
+  const axes = SIGNAL_NODES[id];
+  const [nx, nz] = NODE_POS[id];
+
   return (
     <group>
-      {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
-        const axes = SIGNAL_NODES[id];
-        const [nx, nz] = NODE_POS[id];
-
-        return APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
-          ({ dx, dz, axis }, i) => {
-            const rx = -dz;
-            const rz = dx;
-            const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
-            const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
-            const state = lightFor(snapshot, id, axis);
-            const copy = signalCopy(snapshot, axis, state);
-            return (
-              <SignalHead
-                key={`${id}-${i}-${axis}`}
-                position={[px, 0, pz]}
-                labelOffset={[0, 3.0, 0]}
-                rotationY={Math.atan2(-dx, -dz)}
-                state={state}
-                line1={copy.line1}
-                line2={copy.line2}
-                tone={copy.tone}
-              />
-            );
-          },
-        );
-      })}
+      {APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
+        ({ dx, dz, axis }, i) => {
+          const rx = -dz;
+          const rz = dx;
+          const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
+          const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
+          const state = lightFor(snapshot, id, axis);
+          const copy = signalCopy(snapshot, axis, state);
+          return (
+            <SignalHead
+              key={`${id}-${i}-${axis}`}
+              position={[px, 0, pz]}
+              labelOffset={[0, 3.0, 0]}
+              rotationY={Math.atan2(-dx, -dz)}
+              state={state}
+              line1={copy.line1}
+              line2={copy.line2}
+              tone={copy.tone}
+            />
+          );
+        },
+      )}
     </group>
   );
 }
@@ -407,28 +403,28 @@ function buildCorridors(): Corridor[] {
     const ewActive = z === ACTIVE_EW_Z;
     list.push({
       axis: "EW",
-      sx: -H_EXTENT,
+      sx: -SIM_EXTENT,
       sz: z,
       ux: 1,
       uz: 0,
-      len: H_EXTENT * 2,
+      len: SIM_EXTENT * 2,
       stops: [
-        { dist: -14 + H_EXTENT - STOP_BACK, node: n1 },
-        { dist: 14 + H_EXTENT - STOP_BACK, node: n2 },
+        { dist: -14 + SIM_EXTENT - STOP_BACK, node: n1 },
+        { dist: 14 + SIM_EXTENT - STOP_BACK, node: n2 },
       ],
       road: z < 0 ? "AB" : "CD",
       active: ewActive,
     });
     list.push({
       axis: "EW",
-      sx: H_EXTENT,
+      sx: SIM_EXTENT,
       sz: z,
       ux: -1,
       uz: 0,
-      len: H_EXTENT * 2,
+      len: SIM_EXTENT * 2,
       stops: [
-        { dist: H_EXTENT - 14 - STOP_BACK, node: n2 },
-        { dist: H_EXTENT + 14 - STOP_BACK, node: n1 },
+        { dist: SIM_EXTENT - 14 - STOP_BACK, node: n2 },
+        { dist: SIM_EXTENT + 14 - STOP_BACK, node: n1 },
       ],
       road: z < 0 ? "BA" : "DC",
       active: false,
@@ -442,13 +438,13 @@ function buildCorridors(): Corridor[] {
     list.push({
       axis: "NS",
       sx: x,
-      sz: -V_EXTENT,
+      sz: -V_SIM_EXTENT,
       ux: 0,
       uz: 1,
-      len: V_EXTENT * 2,
+      len: V_SIM_EXTENT * 2,
       stops: [
-        { dist: -9 + V_EXTENT - STOP_BACK, node: n1 },
-        { dist: 9 + V_EXTENT - STOP_BACK, node: n2 },
+        { dist: -9 + V_SIM_EXTENT - STOP_BACK, node: n1 },
+        { dist: 9 + V_SIM_EXTENT - STOP_BACK, node: n2 },
       ],
       road: x < 0 ? "AC" : "BD",
       active: nsActive,
@@ -456,13 +452,13 @@ function buildCorridors(): Corridor[] {
     list.push({
       axis: "NS",
       sx: x,
-      sz: V_EXTENT,
+      sz: V_SIM_EXTENT,
       ux: 0,
       uz: -1,
-      len: V_EXTENT * 2,
+      len: V_SIM_EXTENT * 2,
       stops: [
-        { dist: V_EXTENT - 9 - STOP_BACK, node: n2 },
-        { dist: V_EXTENT + 9 - STOP_BACK, node: n1 },
+        { dist: V_SIM_EXTENT - 9 - STOP_BACK, node: n2 },
+        { dist: V_SIM_EXTENT + 9 - STOP_BACK, node: n1 },
       ],
       road: x < 0 ? "CA" : "DB",
       active: false,
@@ -594,46 +590,32 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 }
 
 function NodeMarkers() {
-  const labels: { id: IntersectionId; sub: string }[] = [
-    { id: "A", sub: "Junction" },
-    { id: "B", sub: "Busy link" },
-    { id: "C", sub: "Quiet link" },
-    { id: "D", sub: "Empty" },
-  ];
+  const [x, z] = NODE_POS.A;
 
   return (
-    <group>
-      {labels.map(({ id, sub }) => {
-        const [x, z] = NODE_POS[id];
-        const offsetZ = z < 0 ? -2.6 : 2.6;
-        return (
-          <Html
-            key={id}
-            position={[x, 1.2, z + offsetZ]}
-            center
-            distanceFactor={14}
-            style={{ pointerEvents: "none", userSelect: "none" }}
-          >
-            <div className="hologram-text text-center">
-              <p className="text-[14px] font-semibold tracking-[0.28em] text-[#3a3632]">
-                {id}
-              </p>
-              <p className="text-[10px] tracking-wide text-[#3a3632]/75">{sub}</p>
-            </div>
-          </Html>
-        );
-      })}
-    </group>
+    <Html
+      position={[x, 1.2, z - 2.6]}
+      center
+      distanceFactor={14}
+      style={{ pointerEvents: "none", userSelect: "none" }}
+    >
+      <div className="hologram-text text-center">
+        <p className="text-[14px] font-semibold tracking-[0.28em] text-[#3a3632]">
+          A
+        </p>
+        <p className="text-[10px] tracking-wide text-[#3a3632]/75">Junction</p>
+      </div>
+    </Html>
   );
 }
 
 function CameraFlyAnimator({
   flyKey,
-  preset,
+  instant,
   controlsRef,
 }: {
   flyKey: number;
-  preset: CameraPresetId;
+  instant?: boolean;
   controlsRef: RefObject<OrbitControlsImpl | null>;
 }) {
   const { camera } = useThree();
@@ -648,16 +630,26 @@ function CameraFlyAnimator({
 
   useEffect(() => {
     if (flyKey === 0) return;
-    const end = CAMERA_PRESETS[preset];
+    anim.current.endPos.copy(NODE_A_CAMERA.position);
+    anim.current.endTarget.copy(NODE_A_CAMERA.target);
+
+    if (instant) {
+      camera.position.copy(anim.current.endPos);
+      if (controlsRef.current) {
+        controlsRef.current.target.copy(anim.current.endTarget);
+        controlsRef.current.update();
+      }
+      anim.current.active = false;
+      return;
+    }
+
     anim.current.active = true;
     anim.current.elapsed = 0;
     anim.current.startPos.copy(camera.position);
     anim.current.startTarget.copy(
       controlsRef.current?.target ?? DEFAULT_TARGET,
     );
-    anim.current.endPos.copy(end.position);
-    anim.current.endTarget.copy(end.target);
-  }, [flyKey, preset, camera, controlsRef]);
+  }, [flyKey, instant, camera, controlsRef]);
 
   useFrame((_, dt) => {
     const controls = controlsRef.current;
@@ -685,29 +677,34 @@ function CameraFlyAnimator({
   return null;
 }
 
-export type { CameraPresetId };
 
 interface Scene3DProps {
   snapshot: TrafficSnapshot;
   cameraFlyKey?: number;
-  cameraPreset?: CameraPresetId;
+  cameraInstant?: boolean;
 }
 
 export default function Scene3D({
   snapshot,
   cameraFlyKey = 0,
-  cameraPreset = "overview",
+  cameraInstant = false,
 }: Scene3DProps) {
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
   return (
     <Canvas
-      camera={{ position: [0, 28, 24], fov: 42, near: 0.1, far: 150 }}
+      camera={{
+        position: [-11, 5, -5],
+        fov: 42,
+        near: 0.1,
+        far: 150,
+      }}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       className="h-full w-full"
     >
       <Suspense fallback={null}>
         <color attach="background" args={["#e8e4dc"]} />
+        <fog attach="fog" args={["#e8e4dc", 25, 85]} />
 
         <OrbitControls
           ref={controlsRef}
@@ -716,13 +713,13 @@ export default function Scene3D({
           enableRotate
           enableDamping
           dampingFactor={0.08}
-          minDistance={12}
-          maxDistance={65}
-          target={[0, 0, 0]}
+          minDistance={4}
+          maxDistance={40}
+          target={[-14, 1.2, -9]}
         />
         <CameraFlyAnimator
           flyKey={cameraFlyKey}
-          preset={cameraPreset}
+          instant={cameraInstant}
           controlsRef={controlsRef}
         />
 
