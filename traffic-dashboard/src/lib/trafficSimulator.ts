@@ -32,6 +32,13 @@ function randomWalk(
   return clamp(current + (Math.random() - 0.5) * delta, min, max);
 }
 
+/** Traffic tiers: Green = 0-30 vehicles, Yellow = 31-80, Red = 81+. */
+export function congestionByCount(count: number): CongestionLevel {
+  if (count <= 30) return "low";
+  if (count <= 80) return "medium";
+  return "high";
+}
+
 function averageCongestion(levels: CongestionLevel[]): CongestionLevel {
   const score =
     levels.reduce((sum, level) => {
@@ -69,20 +76,81 @@ const controllers: Record<IntersectionId, NodeController> = {
 const MIN_GREEN = 3;
 const YELLOW_TICKS = 2;
 const FIXED_GREEN = 6;
+const REALLOC_PERIOD = 5;
+
+/** Green durations by congestion rank (greedy allocation, best score first). */
+const RANK_DURATIONS = [12, 9, 7, 5];
+const RANK_REASONS = [
+  "HIGHEST SCORE → MAX GREEN",
+  "HIGH SCORE → EXTENDED GREEN",
+  "LOW SCORE → REDUCED GREEN",
+  "LOWEST SCORE → MIN GREEN",
+];
+
+interface Allocation {
+  duration: number;
+  rank: number;
+}
+
+const allocations: Record<IntersectionId, Allocation> = {
+  A: { duration: 9, rank: 1 },
+  B: { duration: 9, rank: 1 },
+  C: { duration: 9, rank: 1 },
+  D: { duration: 9, rank: 1 },
+};
+
+let tick = 0;
+
+/**
+ * Greedy allocation, run every REALLOC_PERIOD seconds: sort intersections
+ * by congestion score (vehicle_count + queue_length) and hand the longest
+ * green to the most congested node, shortest to the least.
+ */
+function reallocateGreen(scores: Record<IntersectionId, number>): void {
+  const ranked = [...INTERSECTION_IDS].sort((a, b) => scores[b] - scores[a]);
+  ranked.forEach((id, rank) => {
+    allocations[id] = { duration: RANK_DURATIONS[rank], rank };
+  });
+}
 
 function stepController(
   id: IntersectionId,
   demandEW: number,
   demandNS: number,
+  score: number,
   emergencyAxis: Axis | null,
   mode: SimMode,
 ): DecisionInfo & { ewState: LightState; nsState: LightState } {
   const c = controllers[id];
+  const alloc = allocations[id];
   let reason: string;
+  let greenDuration: number;
 
   if (mode === "fixed") {
-    // Static plan: equal split, blind to demand and emergencies.
-    if (c.phase === "green") {
+    greenDuration = FIXED_GREEN;
+    // Static plan: equal split, blind to demand.
+    if (emergencyAxis) {
+      // Emergency preemption overrides even the fixed plan.
+      if (c.axis !== emergencyAxis) {
+        if (c.phase === "green") {
+          c.phase = "yellow";
+          c.t = 0;
+          reason = "EMERGENCY PREEMPT";
+        } else {
+          c.t += 1;
+          reason = "EMERGENCY PREEMPT";
+          if (c.t >= YELLOW_TICKS) {
+            c.axis = emergencyAxis;
+            c.phase = "green";
+            c.t = 0;
+          }
+        }
+      } else {
+        c.phase = "green";
+        c.t = Math.min(c.t, 1);
+        reason = "EMERGENCY HOLD";
+      }
+    } else if (c.phase === "green") {
       c.t += 1;
       reason = "FIXED TIMER";
       if (c.t >= FIXED_GREEN) {
@@ -100,28 +168,35 @@ function stepController(
     }
   } else {
     const curDemand = c.axis === "EW" ? demandEW : demandNS;
-    const crossDemand = c.axis === "EW" ? demandNS : demandEW;
+    const share = curDemand / Math.max(1, demandEW + demandNS);
+    // Allocated node green, weighted toward the axis that actually has demand.
+    greenDuration = clamp(Math.round(alloc.duration * 2 * share), 3, 14);
 
-    if (c.phase === "green") {
-      c.t += 1;
-      const maxGreen = clamp(4 + Math.round(curDemand / 4), 4, 14);
-
-      if (emergencyAxis && emergencyAxis !== c.axis) {
+    if (emergencyAxis && emergencyAxis !== c.axis) {
+      if (c.phase === "green") {
         c.phase = "yellow";
         c.t = 0;
-        reason = "EMERGENCY PREEMPT";
-      } else if (emergencyAxis && emergencyAxis === c.axis) {
-        c.t = Math.min(c.t, 1);
-        reason = "EMERGENCY HOLD";
-      } else if (
-        c.t >= maxGreen ||
-        (c.t >= MIN_GREEN && crossDemand > curDemand * 1.3 + 2)
-      ) {
-        c.phase = "yellow";
-        c.t = 0;
-        reason = "DEMAND SHIFT";
       } else {
-        reason = curDemand >= crossDemand ? "HIGH DEMAND" : "MIN GREEN";
+        c.t += 1;
+        if (c.t >= YELLOW_TICKS) {
+          c.axis = emergencyAxis;
+          c.phase = "green";
+          c.t = 0;
+        }
+      }
+      reason = "EMERGENCY PREEMPT";
+    } else if (emergencyAxis && emergencyAxis === c.axis) {
+      c.phase = "green";
+      c.t = Math.min(c.t, 1);
+      reason = "EMERGENCY HOLD";
+    } else if (c.phase === "green") {
+      c.t += 1;
+      if (c.t >= Math.max(MIN_GREEN, greenDuration)) {
+        c.phase = "yellow";
+        c.t = 0;
+        reason = "PHASE COMPLETE";
+      } else {
+        reason = RANK_REASONS[alloc.rank];
       }
     } else {
       c.t += 1;
@@ -134,13 +209,19 @@ function stepController(
     }
   }
 
+  const phaseDuration = c.phase === "green" ? greenDuration : YELLOW_TICKS;
+  const remaining = Math.max(0, phaseDuration - c.t);
   const green: LightState = c.phase === "yellow" ? "yellow" : "green";
+
   return {
     id,
     demandEW,
     demandNS,
     activeAxis: c.axis,
     reason,
+    score,
+    greenDuration,
+    remaining,
     ewState: c.axis === "EW" ? green : "red",
     nsState: c.axis === "NS" ? green : "red",
   };
@@ -149,17 +230,13 @@ function stepController(
 function evolveRoad(current: RoadSegment): RoadSegment {
   const dense = roadAxis(current.id) === DENSE_AXIS;
   const vehicleCount = Math.round(
-    randomWalk(current.vehicleCount, 3, dense ? 12 : 1, dense ? 20 : 4),
+    randomWalk(current.vehicleCount, 9, dense ? 40 : 2, dense ? 96 : 26),
   );
 
   return {
     ...current,
     vehicleCount,
-    congestionLevel: dense
-      ? vehicleCount >= 17
-        ? "high"
-        : "medium"
-      : "low",
+    congestionLevel: congestionByCount(vehicleCount),
   };
 }
 
@@ -168,12 +245,13 @@ function initialRoads(): Record<RoadId, RoadSegment> {
     (acc, id) => {
       const [from, to] = roadNodes(id);
       const dense = roadAxis(id) === DENSE_AXIS;
+      const vehicleCount = dense ? 72 : 9;
       acc[id] = {
         id,
         from,
         to,
-        congestionLevel: dense ? "high" : "low",
-        vehicleCount: dense ? 16 : 2,
+        congestionLevel: congestionByCount(vehicleCount),
+        vehicleCount,
       };
       return acc;
     },
@@ -187,13 +265,14 @@ export function createInitialSnapshot(): TrafficSnapshot {
   const intersections = INTERSECTION_IDS.reduce(
     (acc, id) => {
       const c = controllers[id];
+      const vehicleCount = 62 + Math.floor(Math.random() * 30);
       acc[id] = {
         id,
         ewState: c.axis === "EW" ? "green" : "red",
         nsState: c.axis === "NS" ? "green" : "red",
-        vehicleCount: 14 + Math.floor(Math.random() * 8),
+        vehicleCount,
         queueLength: 10 + Math.floor(Math.random() * 5),
-        congestionLevel: "high",
+        congestionLevel: congestionByCount(vehicleCount),
       };
       return acc;
     },
@@ -211,24 +290,30 @@ export function createInitialSnapshot(): TrafficSnapshot {
       demandNS: roads[NS_INBOUND[id]].vehicleCount,
       activeAxis: controllers[id].axis,
       reason: "FIXED TIMER",
+      score:
+        intersections[id].vehicleCount + intersections[id].queueLength,
+      greenDuration: FIXED_GREEN,
+      remaining: FIXED_GREEN,
     })),
-    emergencyTarget: "C",
+    emergencyTarget: null,
     totalVehicles: Object.values(intersections).reduce(
       (sum, i) => sum + i.vehicleCount,
       0,
     ),
-    averageCongestion: "high",
+    averageCongestion: "medium",
     stats: { waitEW: 46, waitNS: 7 },
   };
 }
 
 export function advanceTrafficSnapshot(
   previous: TrafficSnapshot,
-  ambulanceRoad: RoadId,
+  ambulanceRoad: RoadId | null,
   mode: SimMode,
 ): TrafficSnapshot {
-  const emergencyTarget = roadNodes(ambulanceRoad)[1];
-  const emergencyAxis = roadAxis(ambulanceRoad);
+  tick += 1;
+
+  const emergencyTarget = ambulanceRoad ? roadNodes(ambulanceRoad)[1] : null;
+  const emergencyAxis = ambulanceRoad ? roadAxis(ambulanceRoad) : null;
 
   const roads = ROAD_IDS.reduce(
     (acc, id) => {
@@ -238,21 +323,51 @@ export function advanceTrafficSnapshot(
     {} as Record<RoadId, RoadSegment>,
   );
 
-  const decisions: DecisionInfo[] = [];
   const queueTarget = mode === "fixed" ? 13 : 3;
+
+  // First pass: evolve per-node counts and congestion scores.
+  const counts = {} as Record<
+    IntersectionId,
+    { vehicleCount: number; queueLength: number; score: number }
+  >;
+  INTERSECTION_IDS.forEach((id) => {
+    const current = previous.intersections[id];
+    const queueLength = Math.round(
+      clamp(
+        current.queueLength +
+          (queueTarget - current.queueLength) * 0.22 +
+          (Math.random() - 0.5) * 2,
+        0,
+        20,
+      ),
+    );
+    const vehicleCount = Math.round(
+      randomWalk(current.vehicleCount, 14, 24, 112),
+    );
+    counts[id] = {
+      vehicleCount,
+      queueLength,
+      score: vehicleCount + queueLength,
+    };
+  });
+
+  // Every 5 seconds: compare scores across all intersections and greedily
+  // reassign green durations (longest green to the most congested).
+  if (tick % REALLOC_PERIOD === 0) {
+    reallocateGreen({
+      A: counts.A.score,
+      B: counts.B.score,
+      C: counts.C.score,
+      D: counts.D.score,
+    });
+  }
+
+  const decisions: DecisionInfo[] = [];
 
   const intersections = INTERSECTION_IDS.reduce(
     (acc, id) => {
       const current = previous.intersections[id];
-      const queueLength = Math.round(
-        clamp(
-          current.queueLength +
-            (queueTarget - current.queueLength) * 0.22 +
-            (Math.random() - 0.5) * 2,
-          0,
-          20,
-        ),
-      );
+      const { vehicleCount, queueLength, score } = counts[id];
 
       const demandEW =
         roads[EW_INBOUND[id]].vehicleCount + Math.round(queueLength / 2);
@@ -262,7 +377,8 @@ export function advanceTrafficSnapshot(
         id,
         demandEW,
         demandNS,
-        mode === "adaptive" && id === emergencyTarget ? emergencyAxis : null,
+        score,
+        id === emergencyTarget ? emergencyAxis : null,
         mode,
       );
       decisions.push({
@@ -271,11 +387,10 @@ export function advanceTrafficSnapshot(
         demandNS: result.demandNS,
         activeAxis: result.activeAxis,
         reason: result.reason,
+        score: result.score,
+        greenDuration: result.greenDuration,
+        remaining: result.remaining,
       });
-
-      const vehicleCount = Math.round(
-        randomWalk(current.vehicleCount, 4, 8, 26),
-      );
 
       acc[id] = {
         ...current,
@@ -283,8 +398,7 @@ export function advanceTrafficSnapshot(
         nsState: result.nsState,
         vehicleCount,
         queueLength,
-        congestionLevel:
-          queueLength >= 9 ? "high" : queueLength >= 4 ? "medium" : "low",
+        congestionLevel: congestionByCount(vehicleCount),
       };
       return acc;
     },

@@ -35,6 +35,12 @@ export interface DecisionInfo {
   demandNS: number;
   activeAxis: Axis;
   reason: string;
+  /** Congestion score = vehicle_count + queue_length. */
+  score: number;
+  /** Green duration allocated to this node (seconds). */
+  greenDuration: number;
+  /** Countdown — seconds remaining in the current phase. */
+  remaining: number;
 }
 
 export interface TrafficSnapshot {
@@ -43,8 +49,8 @@ export interface TrafficSnapshot {
   intersections: Record<IntersectionId, IntersectionData>;
   roads: Record<RoadId, RoadSegment>;
   decisions: DecisionInfo[];
-  /** Node the ambulance is currently approaching (green corridor target). */
-  emergencyTarget: IntersectionId;
+  /** Node the ambulance is currently approaching, or null when no emergency. */
+  emergencyTarget: IntersectionId | null;
   totalVehicles: number;
   averageCongestion: CongestionLevel;
   /** Average wait per axis (seconds) — the before/after comparison metric. */
