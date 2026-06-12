@@ -2,5 +2,5 @@
 2:I[28045,["/CFAI-/_next/static/chunks/158myu8e_yme3.js","/CFAI-/_next/static/chunks/0iar9stsybdsk.js"],"default"]
 3:I[97367,["/CFAI-/_next/static/chunks/158myu8e_yme3.js"],"OutletBoundary"]
 4:"$Sreact.suspense"
-0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{}],[["$","script","script-0",{"src":"/CFAI-/_next/static/chunks/0iar9stsybdsk.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"3C6ALPREftDZ-lL2udBNA"}
+0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{}],[["$","script","script-0",{"src":"/CFAI-/_next/static/chunks/0iar9stsybdsk.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"vknwmDesykyeWjO5wa6pg"}
 5:null
