@@ -14,13 +14,14 @@ export function getModeIntro(mode: SimMode): NarratorMessage {
   }
   return {
     title: "After — Adaptive timing",
-    reason: "Busy A→B gets more green; queues shrink.",
+    reason: "Busy A→B stays green until cleared · A→C waits.",
   };
 }
 
 export function getLiveNarrator(snapshot: TrafficSnapshot): NarratorMessage {
   const ewState = snapshot.intersections.A.ewState;
   const mode = snapshot.mode;
+  const decision = snapshot.decisions.find((d) => d.id === "A");
 
   if (ewState === "yellow") {
     return {
@@ -38,7 +39,10 @@ export function getLiveNarrator(snapshot: TrafficSnapshot): NarratorMessage {
     }
     return {
       title: "Cars are moving on A→B",
-      reason: "Adaptive mode keeps green longer on the busy link.",
+      reason:
+        decision?.reason === "Clearing busy link"
+          ? "Green stays on until the busy queue clears."
+          : "Adaptive mode keeps green on the busy link.",
     };
   }
 
@@ -52,6 +56,6 @@ export function getLiveNarrator(snapshot: TrafficSnapshot): NarratorMessage {
 
   return {
     title: "Cars are waiting on A→B",
-    reason: "Brief pause while the quiet link clears.",
+    reason: "A→C has green briefly · busy A→B waits its turn.",
   };
 }

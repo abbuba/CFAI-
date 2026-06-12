@@ -59,6 +59,26 @@ const YELLOW_TICKS = 2;
 const FIXED_GREEN = 6;
 const ADAPTIVE_EW_GREEN = 13;
 const ADAPTIVE_NS_GREEN = 3;
+/** Adaptive: keep green on busy link until demand drops below this. */
+const QUEUE_CLEAR_THRESHOLD = 10;
+
+interface AxisDemand {
+  ew: number;
+  ns: number;
+}
+
+function axisDemand(
+  intersections: Record<IntersectionId, IntersectionData>,
+  roads: Record<RoadId, RoadSegment>,
+): AxisDemand {
+  const nodeA = intersections.A;
+  const ew =
+    nodeA.queueLength +
+    nodeA.vehicleCount +
+    roads.AB.vehicleCount * 0.15;
+  const ns = roads.AC.vehicleCount + intersections.A.vehicleCount * 0.05;
+  return { ew, ns };
+}
 
 /** One network-wide phase — all intersections flip EW/NS together. */
 interface NetworkPhase {
@@ -86,7 +106,7 @@ export function resetSimulation(mode: SimMode): TrafficSnapshot {
         ewState: "green",
         nsState: "red",
         vehicleCount: roadAxis(EW_INBOUND[id]) === DENSE_AXIS ? 72 : 2,
-        queueLength: mode === "fixed" ? 12 : 5,
+        queueLength: mode === "fixed" ? 12 : 14,
         congestionLevel: "medium",
       };
       return acc;
@@ -115,13 +135,22 @@ function reasonFor(
   mode: SimMode,
   activeAxis: Axis,
   phase: "green" | "yellow",
+  demand?: AxisDemand,
 ): string {
   if (phase === "yellow") return "Clearing";
   if (mode === "fixed") return "Equal timer";
+  if (
+    activeAxis === DENSE_AXIS &&
+    phase === "green" &&
+    demand &&
+    demand.ew > QUEUE_CLEAR_THRESHOLD
+  ) {
+    return "Clearing busy link";
+  }
   return activeAxis === DENSE_AXIS ? "Demand priority" : "Light flow";
 }
 
-function stepNetwork(mode: SimMode): {
+function stepNetwork(mode: SimMode, demand?: AxisDemand): {
   activeAxis: Axis;
   ewState: LightState;
   nsState: LightState;
@@ -132,15 +161,33 @@ function stepNetwork(mode: SimMode): {
   const duration = greenDurationFor(mode, network.axis);
 
   if (network.phase === "green") {
-    network.t += 1;
-    if (network.t >= duration) {
-      network.phase = "yellow";
-      network.t = 0;
+    let advanceTick = true;
+
+    if (mode === "adaptive" && demand && network.axis === DENSE_AXIS) {
+      if (demand.ew > QUEUE_CLEAR_THRESHOLD) {
+        advanceTick = false;
+      }
+    }
+
+    if (advanceTick) {
+      network.t += 1;
+      if (network.t >= duration) {
+        network.phase = "yellow";
+        network.t = 0;
+      }
     }
   } else {
     network.t += 1;
     if (network.t >= YELLOW_TICKS) {
-      network.axis = network.axis === "EW" ? "NS" : "EW";
+      if (mode === "adaptive" && demand) {
+        if (network.axis === DENSE_AXIS) {
+          network.axis = demand.ew > QUEUE_CLEAR_THRESHOLD ? "EW" : "NS";
+        } else {
+          network.axis = "EW";
+        }
+      } else {
+        network.axis = network.axis === "EW" ? "NS" : "EW";
+      }
       network.phase = "green";
       network.t = 0;
     }
@@ -160,7 +207,7 @@ function stepNetwork(mode: SimMode): {
     nsState: network.axis === "NS" ? active : "red",
     greenDuration: duration,
     remaining,
-    reason: reasonFor(mode, network.axis, network.phase),
+    reason: reasonFor(mode, network.axis, network.phase, demand),
   };
 }
 
@@ -292,7 +339,8 @@ export function advanceTrafficSnapshot(
 ): TrafficSnapshot {
   tick += 1;
 
-  const phase = stepNetwork(mode);
+  const demand = axisDemand(previous.intersections, previous.roads);
+  const phase = stepNetwork(mode, demand);
 
   const roads = ROAD_IDS.reduce(
     (acc, id) => {
@@ -302,7 +350,14 @@ export function advanceTrafficSnapshot(
     {} as Record<RoadId, RoadSegment>,
   );
 
-  const queueTarget = mode === "fixed" ? 14 : 4;
+  const queueTarget =
+    mode === "fixed"
+      ? 14
+      : phase.ewState === "green"
+        ? 2
+        : 5;
+  const queueDecay =
+    mode === "adaptive" && phase.ewState === "green" ? 0.35 : 0.2;
 
   const intersections = INTERSECTION_IDS.reduce(
     (acc, id) => {
@@ -310,7 +365,7 @@ export function advanceTrafficSnapshot(
       const queueLength = Math.round(
         clamp(
           current.queueLength +
-            (queueTarget - current.queueLength) * 0.2 +
+            (queueTarget - current.queueLength) * queueDecay +
             (Math.random() - 0.5) * 1.5,
           2,
           22,

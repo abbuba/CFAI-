@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useRef, type RefObject } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { Html, OrbitControls, RoundedBox } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
@@ -14,7 +14,6 @@ import type {
   VehicleType,
 } from "@/types/traffic";
 import { ROAD_IDS, roadAxis, roadNodes } from "@/lib/intersectionLayout";
-import { NODE_A_CAMERA } from "@/lib/cameraPresets";
 
 const NODE_POS: Record<IntersectionId, [number, number]> = {
   A: [-14, -9],
@@ -22,9 +21,6 @@ const NODE_POS: Record<IntersectionId, [number, number]> = {
   C: [-14, 9],
   D: [14, 9],
 };
-
-const DEFAULT_TARGET = NODE_A_CAMERA.target.clone();
-const CAMERA_ANIM_SEC = 0.65;
 
 const ROAD_W = 3.4;
 const LANE = 0.85;
@@ -53,6 +49,18 @@ const SIGNAL_NODES: Record<IntersectionId, Axis[]> = {
 
 const ACTIVE_ROAD_IDS: RoadId[] = ["AB", "BA", "AC", "CA"];
 
+/** Dotted perimeter linking the four intersection nodes. */
+const NETWORK_RING: [IntersectionId, IntersectionId][] = [
+  ["A", "B"],
+  ["B", "D"],
+  ["D", "C"],
+  ["C", "A"],
+];
+
+const LINK_HEIGHT = 5.4;
+const CLOUD_HEIGHT = 10.2;
+const DOTTED_COLOR = "#8a8480";
+
 function lightFor(
   snapshot: TrafficSnapshot,
   node: IntersectionId,
@@ -72,9 +80,11 @@ function signalCopy(
   const remaining = decision?.remaining ?? 0;
 
   if (state === "green") {
+    const clearing =
+      snapshot.mode === "adaptive" && decision?.reason === "Clearing busy link";
     return {
-      line1: `GREEN ${remaining}s`,
-      line2: snapshot.mode === "fixed" ? "Equal timer" : "Demand priority",
+      line1: clearing ? "GREEN · hold" : `GREEN ${remaining}s`,
+      line2: snapshot.mode === "fixed" ? "Equal timer" : "Until link clears",
       tone: "#34c759",
     };
   }
@@ -189,6 +199,21 @@ function Roads() {
         <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
         <meshStandardMaterial color="#5c5752" roughness={0.85} />
       </mesh>
+      {(
+        [
+          { id: "B" as const, color: "#5c5752" },
+          { id: "C" as const, color: "#6b6560" },
+          { id: "D" as const, color: ROAD_QUIET },
+        ] as const
+      ).map(({ id, color }) => {
+        const [x, z] = NODE_POS[id];
+        return (
+          <mesh key={id} position={[x, 0.028, z]}>
+            <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
+            <meshStandardMaterial color={color} roughness={0.85} />
+          </mesh>
+        );
+      })}
 
       {ACTIVE_ROAD_IDS.map((roadId) => {
         const g = roadGeom(roadId);
@@ -231,6 +256,130 @@ function roadGeom(roadId: RoadId) {
     rz: ux,
     len: dist - PAD * 2,
   };
+}
+
+function EdgeSensorRig() {
+  return (
+    <group position={[0.24, 1.5, 0.1]}>
+      <mesh position={[0, 0.14, 0]}>
+        <boxGeometry args={[0.16, 0.11, 0.1]} />
+        <meshStandardMaterial color="#2e2c2a" roughness={0.45} metalness={0.35} />
+      </mesh>
+      <mesh position={[0, 0.14, 0.07]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.04, 0.045, 0.07, 10]} />
+        <meshStandardMaterial
+          color="#111111"
+          emissive="#2244aa"
+          emissiveIntensity={0.35}
+        />
+      </mesh>
+      <mesh position={[0, -0.02, 0]}>
+        <boxGeometry args={[0.22, 0.12, 0.16]} />
+        <meshStandardMaterial color="#3d4846" roughness={0.4} metalness={0.5} />
+      </mesh>
+      <mesh position={[0.09, -0.02, 0.09]}>
+        <sphereGeometry args={[0.022, 8, 8]} />
+        <meshStandardMaterial
+          color="#34c759"
+          emissive="#34c759"
+          emissiveIntensity={1.4}
+        />
+      </mesh>
+      <mesh position={[-0.09, -0.02, 0.09]}>
+        <boxGeometry args={[0.04, 0.015, 0.01]} />
+        <meshStandardMaterial
+          color="#76c7c0"
+          emissive="#76c7c0"
+          emissiveIntensity={0.9}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+function DottedLink({
+  from,
+  to,
+}: {
+  from: IntersectionId;
+  to: IntersectionId;
+}) {
+  const lineRef = useRef<THREE.Line>(null);
+
+  const line = useMemo(() => {
+    const [ax, az] = NODE_POS[from];
+    const [bx, bz] = NODE_POS[to];
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(ax, LINK_HEIGHT, az),
+      new THREE.Vector3(bx, LINK_HEIGHT, bz),
+    ]);
+    const material = new THREE.LineDashedMaterial({
+      color: DOTTED_COLOR,
+      dashSize: 0.55,
+      gapSize: 0.32,
+      transparent: true,
+      opacity: 0.8,
+    });
+    const segment = new THREE.Line(geometry, material);
+    segment.computeLineDistances();
+    return segment;
+  }, [from, to]);
+
+  useLayoutEffect(() => {
+    lineRef.current?.computeLineDistances();
+  }, [line]);
+
+  return <primitive ref={lineRef} object={line} />;
+}
+
+function SimpleCloud() {
+  const blobs: [number, number, number, number][] = [
+    [0, 0, 0, 1.05],
+    [-0.8, -0.12, 0.2, 0.68],
+    [0.85, -0.08, -0.15, 0.62],
+    [0.1, 0.12, 0.5, 0.5],
+    [-0.3, 0.05, -0.55, 0.45],
+  ];
+
+  return (
+    <group position={[0, CLOUD_HEIGHT, 0]}>
+      {blobs.map(([x, y, z, radius], index) => (
+        <mesh key={index} position={[x, y, z]}>
+          <sphereGeometry args={[radius, 14, 14]} />
+          <meshStandardMaterial color="#f0ebe3" roughness={0.96} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function EdgeNetworkVisual() {
+  const uplink = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, LINK_HEIGHT, 0),
+      new THREE.Vector3(0, CLOUD_HEIGHT - 1.1, 0),
+    ]);
+    const material = new THREE.LineDashedMaterial({
+      color: DOTTED_COLOR,
+      dashSize: 0.45,
+      gapSize: 0.28,
+      transparent: true,
+      opacity: 0.65,
+    });
+    const segment = new THREE.Line(geometry, material);
+    segment.computeLineDistances();
+    return segment;
+  }, []);
+
+  return (
+    <group>
+      {NETWORK_RING.map(([from, to]) => (
+        <DottedLink key={`${from}-${to}`} from={from} to={to} />
+      ))}
+      <primitive object={uplink} />
+      <SimpleCloud />
+    </group>
+  );
 }
 
 function SignalHead({
@@ -277,6 +426,8 @@ function SignalHead({
         {lens("#34c759", state === "green", -0.26)}
       </group>
 
+      <EdgeSensorRig />
+
       <Html
         position={labelOffset}
         center
@@ -305,34 +456,35 @@ const APPROACHES: { dx: number; dz: number; axis: Axis }[] = [
 ];
 
 function Signals({ snapshot }: { snapshot: TrafficSnapshot }) {
-  const id: IntersectionId = "A";
-  const axes = SIGNAL_NODES[id];
-  const [nx, nz] = NODE_POS[id];
-
   return (
     <group>
-      {APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
-        ({ dx, dz, axis }, i) => {
-          const rx = -dz;
-          const rz = dx;
-          const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
-          const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
-          const state = lightFor(snapshot, id, axis);
-          const copy = signalCopy(snapshot, axis, state);
-          return (
-            <SignalHead
-              key={`${id}-${i}-${axis}`}
-              position={[px, 0, pz]}
-              labelOffset={[0, 3.0, 0]}
-              rotationY={Math.atan2(-dx, -dz)}
-              state={state}
-              line1={copy.line1}
-              line2={copy.line2}
-              tone={copy.tone}
-            />
-          );
-        },
-      )}
+      {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
+        const axes = SIGNAL_NODES[id];
+        const [nx, nz] = NODE_POS[id];
+
+        return APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
+          ({ dx, dz, axis }, i) => {
+            const rx = -dz;
+            const rz = dx;
+            const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
+            const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
+            const state = lightFor(snapshot, id, axis);
+            const copy = signalCopy(snapshot, axis, state);
+            return (
+              <SignalHead
+                key={`${id}-${i}-${axis}`}
+                position={[px, 0, pz]}
+                labelOffset={[0, 3.0, 0]}
+                rotationY={Math.atan2(-dx, -dz)}
+                state={state}
+                line1={copy.line1}
+                line2={copy.line2}
+                tone={copy.tone}
+              />
+            );
+          },
+        );
+      })}
     </group>
   );
 }
@@ -590,105 +742,44 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 }
 
 function NodeMarkers() {
-  const [x, z] = NODE_POS.A;
+  const labels: { id: IntersectionId; sub: string }[] = [
+    { id: "A", sub: "Junction" },
+    { id: "B", sub: "Busy link end" },
+    { id: "C", sub: "Quiet link" },
+    { id: "D", sub: "Empty node" },
+  ];
 
   return (
-    <Html
-      position={[x, 1.2, z - 2.6]}
-      center
-      distanceFactor={14}
-      style={{ pointerEvents: "none", userSelect: "none" }}
-    >
-      <div className="hologram-text text-center">
-        <p className="text-[14px] font-semibold tracking-[0.28em] text-[#3a3632]">
-          A
-        </p>
-        <p className="text-[10px] tracking-wide text-[#3a3632]/75">Junction</p>
-      </div>
-    </Html>
+    <group>
+      {labels.map(({ id, sub }) => {
+        const [x, z] = NODE_POS[id];
+        const offsetZ = z < 0 ? -2.6 : 2.6;
+        return (
+          <Html
+            key={id}
+            position={[x, 1.2, z + offsetZ]}
+            center
+            distanceFactor={14}
+            style={{ pointerEvents: "none", userSelect: "none" }}
+          >
+            <div className="hologram-text text-center">
+              <p className="text-[14px] font-semibold tracking-[0.28em] text-[#3a3632]">
+                {id}
+              </p>
+              <p className="text-[10px] tracking-wide text-[#3a3632]/75">{sub}</p>
+            </div>
+          </Html>
+        );
+      })}
+    </group>
   );
 }
 
-function CameraFlyAnimator({
-  flyKey,
-  instant,
-  controlsRef,
-}: {
-  flyKey: number;
-  instant?: boolean;
-  controlsRef: RefObject<OrbitControlsImpl | null>;
-}) {
-  const { camera } = useThree();
-  const anim = useRef({
-    active: false,
-    elapsed: 0,
-    startPos: new THREE.Vector3(),
-    startTarget: new THREE.Vector3(),
-    endPos: new THREE.Vector3(),
-    endTarget: new THREE.Vector3(),
-  });
-
-  useEffect(() => {
-    if (flyKey === 0) return;
-    anim.current.endPos.copy(NODE_A_CAMERA.position);
-    anim.current.endTarget.copy(NODE_A_CAMERA.target);
-
-    if (instant) {
-      camera.position.copy(anim.current.endPos);
-      if (controlsRef.current) {
-        controlsRef.current.target.copy(anim.current.endTarget);
-        controlsRef.current.update();
-      }
-      anim.current.active = false;
-      return;
-    }
-
-    anim.current.active = true;
-    anim.current.elapsed = 0;
-    anim.current.startPos.copy(camera.position);
-    anim.current.startTarget.copy(
-      controlsRef.current?.target ?? DEFAULT_TARGET,
-    );
-  }, [flyKey, instant, camera, controlsRef]);
-
-  useFrame((_, dt) => {
-    const controls = controlsRef.current;
-    if (!anim.current.active || !controls) return;
-
-    anim.current.elapsed += dt;
-    const t = Math.min(anim.current.elapsed / CAMERA_ANIM_SEC, 1);
-    const ease = 1 - (1 - t) ** 3;
-
-    camera.position.lerpVectors(
-      anim.current.startPos,
-      anim.current.endPos,
-      ease,
-    );
-    controls.target.lerpVectors(
-      anim.current.startTarget,
-      anim.current.endTarget,
-      ease,
-    );
-    controls.update();
-
-    if (t >= 1) anim.current.active = false;
-  });
-
-  return null;
-}
-
-
 interface Scene3DProps {
   snapshot: TrafficSnapshot;
-  cameraFlyKey?: number;
-  cameraInstant?: boolean;
 }
 
-export default function Scene3D({
-  snapshot,
-  cameraFlyKey = 0,
-  cameraInstant = false,
-}: Scene3DProps) {
+export default function Scene3D({ snapshot }: Scene3DProps) {
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
   return (
@@ -717,11 +808,6 @@ export default function Scene3D({
           maxDistance={40}
           target={[-14, 1.2, -9]}
         />
-        <CameraFlyAnimator
-          flyKey={cameraFlyKey}
-          instant={cameraInstant}
-          controlsRef={controlsRef}
-        />
 
         <ambientLight intensity={0.7} color="#f5f0e8" />
         <directionalLight
@@ -738,6 +824,7 @@ export default function Scene3D({
 
         <Ground />
         <Roads />
+        <EdgeNetworkVisual />
         <Signals snapshot={snapshot} />
         <CarsLayer snapshot={snapshot} />
         <NodeMarkers />

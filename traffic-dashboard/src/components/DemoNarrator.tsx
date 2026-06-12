@@ -21,7 +21,7 @@ export default function DemoNarrator({
   useEffect(() => {
     setIntroActive(true);
     setMessage(getModeIntro(mode));
-    const timer = window.setTimeout(() => setIntroActive(false), 3000);
+    const timer = window.setTimeout(() => setIntroActive(false), 5000);
     return () => window.clearTimeout(timer);
   }, [modeSwitchKey, mode]);
 
