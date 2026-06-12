@@ -25,6 +25,8 @@ export default function TrafficDashboard() {
   );
   const [mode, setMode] = useState<SimMode>("fixed");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [cameraResetKey, setCameraResetKey] = useState(0);
+  const [resetSpin, setResetSpin] = useState(false);
   const modeRef = useRef<SimMode>("fixed");
 
   const toggleMode = useCallback(() => {
@@ -34,6 +36,12 @@ export default function TrafficDashboard() {
       setSnapshot(resetSimulation(next));
       return next;
     });
+  }, []);
+
+  const resetView = useCallback(() => {
+    setCameraResetKey((k) => k + 1);
+    setResetSpin(true);
+    window.setTimeout(() => setResetSpin(false), 650);
   }, []);
 
   useEffect(() => {
@@ -47,7 +55,22 @@ export default function TrafficDashboard() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#e8e4dc]">
-      <Scene3D snapshot={snapshot} />
+      <Scene3D snapshot={snapshot} cameraResetKey={cameraResetKey} />
+
+      <button
+        type="button"
+        onClick={resetView}
+        aria-label="Reset camera view"
+        className="absolute bottom-6 left-6 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-[#ddd6c8]/90 bg-[#f5f0e8]/90 text-[#3a3632]/55 shadow-sm transition-all duration-300 hover:border-[#c9c0b4] hover:text-[#3a3632] hover:shadow-md"
+      >
+        <span
+          className={`inline-block text-base leading-none transition-transform duration-[650ms] ease-out ${
+            resetSpin ? "rotate-[360deg]" : "rotate-0"
+          }`}
+        >
+          ↻
+        </span>
+      </button>
 
       <InfoPanel
         mode={mode}

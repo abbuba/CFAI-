@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Suspense, useEffect, useRef, type RefObject } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, RoundedBox } from "@react-three/drei";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import type {
   Axis,
@@ -20,6 +21,10 @@ const NODE_POS: Record<IntersectionId, [number, number]> = {
   C: [-14, 9],
   D: [14, 9],
 };
+
+const DEFAULT_CAMERA = new THREE.Vector3(0, 28, 24);
+const DEFAULT_TARGET = new THREE.Vector3(0, 0, 0);
+const CAMERA_ANIM_SEC = 0.65;
 
 const ROAD_W = 3.4;
 const LANE = 0.85;
@@ -629,11 +634,99 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
   );
 }
 
-interface Scene3DProps {
-  snapshot: TrafficSnapshot;
+function NodeMarkers() {
+  const labels: { id: "A" | "B"; sub: string }[] = [
+    { id: "A", sub: "Hub" },
+    { id: "B", sub: "East end" },
+  ];
+
+  return (
+    <group>
+      {labels.map(({ id, sub }) => {
+        const [x, z] = NODE_POS[id];
+        return (
+          <Html
+            key={id}
+            position={[x, 1.2, z - 2.8]}
+            center
+            distanceFactor={14}
+            style={{ pointerEvents: "none", userSelect: "none" }}
+          >
+            <div className="hologram-text text-center">
+              <p className="text-[14px] font-medium tracking-[0.3em] text-[#3a3632]/85">
+                {id}
+              </p>
+              <p className="text-[9px] tracking-wide text-[#3a3632]/50">{sub}</p>
+            </div>
+          </Html>
+        );
+      })}
+    </group>
+  );
 }
 
-export default function Scene3D({ snapshot }: Scene3DProps) {
+function CameraResetAnimator({
+  resetKey,
+  controlsRef,
+}: {
+  resetKey: number;
+  controlsRef: RefObject<OrbitControlsImpl | null>;
+}) {
+  const { camera } = useThree();
+  const anim = useRef({
+    active: false,
+    elapsed: 0,
+    startPos: new THREE.Vector3(),
+    startTarget: new THREE.Vector3(),
+  });
+
+  useEffect(() => {
+    if (resetKey === 0) return;
+    anim.current.active = true;
+    anim.current.elapsed = 0;
+    anim.current.startPos.copy(camera.position);
+    anim.current.startTarget.copy(
+      controlsRef.current?.target ?? DEFAULT_TARGET,
+    );
+  }, [resetKey, camera, controlsRef]);
+
+  useFrame((_, dt) => {
+    const controls = controlsRef.current;
+    if (!anim.current.active || !controls) return;
+
+    anim.current.elapsed += dt;
+    const t = Math.min(anim.current.elapsed / CAMERA_ANIM_SEC, 1);
+    const ease = 1 - (1 - t) ** 3;
+
+    camera.position.lerpVectors(
+      anim.current.startPos,
+      DEFAULT_CAMERA,
+      ease,
+    );
+    controls.target.lerpVectors(
+      anim.current.startTarget,
+      DEFAULT_TARGET,
+      ease,
+    );
+    controls.update();
+
+    if (t >= 1) anim.current.active = false;
+  });
+
+  return null;
+}
+
+interface Scene3DProps {
+  snapshot: TrafficSnapshot;
+  cameraResetKey?: number;
+}
+
+export default function Scene3D({
+  snapshot,
+  cameraResetKey = 0,
+}: Scene3DProps) {
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+
   return (
     <Canvas
       camera={{ position: [0, 28, 24], fov: 42, near: 0.1, far: 150 }}
@@ -644,6 +737,7 @@ export default function Scene3D({ snapshot }: Scene3DProps) {
         <color attach="background" args={["#e8e4dc"]} />
 
         <OrbitControls
+          ref={controlsRef}
           enablePan
           enableZoom
           enableRotate
@@ -651,6 +745,10 @@ export default function Scene3D({ snapshot }: Scene3DProps) {
           maxDistance={55}
           maxPolarAngle={Math.PI / 2.15}
           target={[0, 0, 0]}
+        />
+        <CameraResetAnimator
+          resetKey={cameraResetKey}
+          controlsRef={controlsRef}
         />
 
         <ambientLight intensity={0.7} color="#f5f0e8" />
@@ -670,6 +768,7 @@ export default function Scene3D({ snapshot }: Scene3DProps) {
         <Roads />
         <Signals snapshot={snapshot} />
         <CarsLayer snapshot={snapshot} />
+        <NodeMarkers />
       </Suspense>
     </Canvas>
   );
