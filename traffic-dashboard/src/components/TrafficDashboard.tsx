@@ -8,6 +8,7 @@ import {
   createInitialSnapshot,
   resetSimulation,
 } from "@/lib/trafficSimulator";
+import InfoPanel from "@/components/InfoPanel";
 
 const Scene3D = dynamic(() => import("@/components/Scene3D"), {
   ssr: false,
@@ -23,6 +24,7 @@ export default function TrafficDashboard() {
     createInitialSnapshot(),
   );
   const [mode, setMode] = useState<SimMode>("fixed");
+  const [panelOpen, setPanelOpen] = useState(true);
   const modeRef = useRef<SimMode>("fixed");
 
   const toggleMode = useCallback(() => {
@@ -43,23 +45,16 @@ export default function TrafficDashboard() {
     return () => window.clearInterval(interval);
   }, []);
 
-  const adaptive = mode === "adaptive";
-
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#e8e4dc]">
       <Scene3D snapshot={snapshot} />
 
-      <button
-        type="button"
-        onClick={toggleMode}
-        className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2 text-[12px] font-light tracking-wide text-[#3a3632]/70 transition-all duration-500 ease-out hover:text-[#3a3632]"
-      >
-        {adaptive ? "After · Adaptive" : "Before · Fixed"}
-        <span className="mx-2 text-[#3a3632]/30">·</span>
-        <span className="text-[#3a3632]/45">
-          tap to {adaptive ? "show fixed timing" : "show adaptive timing"}
-        </span>
-      </button>
+      <InfoPanel
+        mode={mode}
+        open={panelOpen}
+        onToggle={() => setPanelOpen((v) => !v)}
+        onSwitchMode={toggleMode}
+      />
     </div>
   );
 }

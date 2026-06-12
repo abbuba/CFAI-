@@ -2,20 +2,17 @@
 
 import { Suspense, useEffect, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Html, RoundedBox } from "@react-three/drei";
+import { Html, OrbitControls, RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
 import type {
   Axis,
   IntersectionId,
   LightState,
   RoadId,
-  SimMode,
   TrafficSnapshot,
   VehicleType,
 } from "@/types/traffic";
 import { ROAD_IDS, roadAxis, roadNodes } from "@/lib/intersectionLayout";
-
-// ---------------------------------------------------------------- layout
 
 const NODE_POS: Record<IntersectionId, [number, number]> = {
   A: [-14, -9],
@@ -31,6 +28,25 @@ const H_EXTENT = 30;
 const V_EXTENT = 21;
 const CAR_NOSE = 1.1;
 
+/** Demo: only bottom EW (A–B) and left NS (A–C) carry traffic. */
+const ACTIVE_EW_Z = -9;
+const ACTIVE_NS_X = -14;
+
+const ROAD_ACTIVE = "#6b6560";
+const ROAD_IDLE = "#ddd6c8";
+const MARK_ACTIVE = "#f5f0e8";
+const MARK_IDLE = "#e8e0d4";
+
+const SIGNAL_NODES: Record<
+  IntersectionId,
+  Axis[] | null
+> = {
+  A: ["EW", "NS"],
+  B: ["EW"],
+  C: ["NS"],
+  D: null,
+};
+
 function lightFor(
   snapshot: TrafficSnapshot,
   node: IntersectionId,
@@ -43,54 +59,42 @@ function lightFor(
 
 function signalCopy(
   snapshot: TrafficSnapshot,
-  nodeId: IntersectionId,
   axis: Axis,
   state: LightState,
 ): { line1: string; line2: string; tone: string } {
-  const decision = snapshot.decisions.find((d) => d.id === nodeId);
+  const decision = snapshot.decisions[0];
   const remaining = decision?.remaining ?? 0;
-  const arrow = axis === "EW" ? "\u2194" : "\u2195";
-  const other = axis === "EW" ? "N\u2013S" : "E\u2013W";
 
   if (state === "green") {
     return {
-      line1: `${arrow} GREEN \u00b7 ${remaining}s`,
-      line2: decision?.reason ?? "",
+      line1: `GREEN ${remaining}s`,
+      line2: snapshot.mode === "fixed" ? "Equal timer" : "Demand priority",
       tone: "#34c759",
     };
   }
   if (state === "yellow") {
     return {
-      line1: `${arrow} YELLOW \u00b7 ${remaining}s`,
+      line1: `YELLOW ${remaining}s`,
       line2: "Clearing",
-      tone: "#ffcc00",
+      tone: "#d4a017",
     };
   }
 
   if (snapshot.mode === "fixed") {
     return {
       line1: "STOP",
-      line2: `Fixed \u00b7 empty ${other} has green`,
-      tone: "#ff3b30",
-    };
-  }
-
-  if (axis === "EW") {
-    return {
-      line1: "STOP",
-      line2: "Adaptive \u00b7 heavy flow waits",
+      line2: axis === "EW" ? "Empty lane green" : "Empty lane green",
       tone: "#ff3b30",
     };
   }
 
   return {
     line1: "STOP",
-    line2: "Adaptive \u00b7 brief wait",
+    line2: axis === "EW" ? "Heavy queue" : "Brief wait",
     tone: "#ff3b30",
   };
 }
 
-// ---------------------------------------------------------------- ground
 
 function Ground() {
   return (
@@ -107,81 +111,124 @@ function Ground() {
   );
 }
 
-// ---------------------------------------------------------------- roads
-
 function RoadStrip({
   x,
   z,
   length,
   horizontal,
+  active,
 }: {
   x: number;
   z: number;
   length: number;
   horizontal: boolean;
+  active: boolean;
 }) {
+  const asphalt = active ? ROAD_ACTIVE : ROAD_IDLE;
+  const mark = active ? MARK_ACTIVE : MARK_IDLE;
   const size: [number, number, number] = horizontal
     ? [length, 0.04, ROAD_W]
     : [ROAD_W, 0.04, length];
   const edge: [number, number, number] = horizontal
-    ? [length, 0.012, 0.06]
-    : [0.06, 0.012, length];
+    ? [length, 0.012, 0.05]
+    : [0.05, 0.012, length];
   const half = ROAD_W / 2 - 0.12;
 
   return (
     <group position={[x, 0.015, z]}>
       <mesh>
         <boxGeometry args={size} />
-        <meshStandardMaterial color="#2c2c2e" roughness={0.88} />
-      </mesh>
-      <mesh position={horizontal ? [0, 0.025, -half] : [-half, 0.025, 0]}>
-        <boxGeometry args={edge} />
-        <meshStandardMaterial color="#f5f0e8" />
-      </mesh>
-      <mesh position={horizontal ? [0, 0.025, half] : [half, 0.025, 0]}>
-        <boxGeometry args={edge} />
-        <meshStandardMaterial color="#f5f0e8" />
-      </mesh>
-      <mesh position={horizontal ? [0, 0.025, -0.06] : [-0.06, 0.025, 0]}>
-        <boxGeometry
-          args={
-            horizontal ? [length, 0.01, 0.04] : [0.04, 0.01, length]
-          }
+        <meshStandardMaterial
+          color={asphalt}
+          roughness={active ? 0.88 : 0.95}
+          transparent={!active}
+          opacity={active ? 1 : 0.55}
         />
-        <meshStandardMaterial color="#c9a227" transparent opacity={0.75} />
       </mesh>
-      <mesh position={horizontal ? [0, 0.025, 0.06] : [0.06, 0.025, 0]}>
-        <boxGeometry
-          args={
-            horizontal ? [length, 0.01, 0.04] : [0.04, 0.01, length]
-          }
-        />
-        <meshStandardMaterial color="#c9a227" transparent opacity={0.75} />
-      </mesh>
+      {active && (
+        <>
+          <mesh position={horizontal ? [0, 0.025, -half] : [-half, 0.025, 0]}>
+            <boxGeometry args={edge} />
+            <meshStandardMaterial color={mark} />
+          </mesh>
+          <mesh position={horizontal ? [0, 0.025, half] : [half, 0.025, 0]}>
+            <boxGeometry args={edge} />
+            <meshStandardMaterial color={mark} />
+          </mesh>
+          <mesh position={horizontal ? [0, 0.025, -0.06] : [-0.06, 0.025, 0]}>
+            <boxGeometry
+              args={
+                horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
+              }
+            />
+            <meshStandardMaterial color="#c4a574" transparent opacity={0.7} />
+          </mesh>
+          <mesh position={horizontal ? [0, 0.025, 0.06] : [0.06, 0.025, 0]}>
+            <boxGeometry
+              args={
+                horizontal ? [length, 0.01, 0.035] : [0.035, 0.01, length]
+              }
+            />
+            <meshStandardMaterial color="#c4a574" transparent opacity={0.7} />
+          </mesh>
+        </>
+      )}
     </group>
   );
+}
+
+function isActiveSegment(roadId: RoadId): boolean {
+  if (roadId === "AB" || roadId === "BA") return true;
+  if (roadId === "AC" || roadId === "CA") return true;
+  return false;
 }
 
 function Roads() {
   return (
     <group>
-      <RoadStrip x={0} z={-9} length={H_EXTENT * 2} horizontal />
-      <RoadStrip x={0} z={9} length={H_EXTENT * 2} horizontal />
-      <RoadStrip x={-14} z={0} length={V_EXTENT * 2} horizontal={false} />
-      <RoadStrip x={14} z={0} length={V_EXTENT * 2} horizontal={false} />
+      <RoadStrip
+        x={0}
+        z={-9}
+        length={H_EXTENT * 2}
+        horizontal
+        active
+      />
+      <RoadStrip x={0} z={9} length={H_EXTENT * 2} horizontal active={false} />
+      <RoadStrip
+        x={-14}
+        z={0}
+        length={V_EXTENT * 2}
+        horizontal={false}
+        active
+      />
+      <RoadStrip
+        x={14}
+        z={0}
+        length={V_EXTENT * 2}
+        horizontal={false}
+        active={false}
+      />
 
       {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
         const [x, z] = NODE_POS[id];
+        const active =
+          id === "A" ||
+          id === "B" ||
+          id === "C";
         return (
           <mesh key={id} position={[x, 0.028, z]}>
             <boxGeometry args={[ROAD_W + 0.2, 0.015, ROAD_W + 0.2]} />
-            <meshStandardMaterial color="#333336" roughness={0.85} />
+            <meshStandardMaterial
+              color={active ? "#5c5752" : ROAD_IDLE}
+              roughness={0.85}
+              transparent={!active}
+              opacity={active ? 1 : 0.4}
+            />
           </mesh>
         );
       })}
 
-      {ROAD_IDS.map((roadId) => {
-        const [from] = roadNodes(roadId);
+      {ROAD_IDS.filter(isActiveSegment).map((roadId) => {
         const g = roadGeom(roadId);
         const stopD = g.len - 0.85;
         const sx = g.sx + g.ux * stopD;
@@ -196,7 +243,7 @@ function Roads() {
                   : [ROAD_W - 0.5, 0.01, 0.14]
               }
             />
-            <meshStandardMaterial color="#f5f0e8" />
+            <meshStandardMaterial color={MARK_ACTIVE} />
           </mesh>
         );
       })}
@@ -224,8 +271,6 @@ function roadGeom(roadId: RoadId) {
   };
 }
 
-// ---------------------------------------------------------------- signals
-
 function SignalHead({
   position,
   labelOffset,
@@ -247,9 +292,9 @@ function SignalHead({
     <mesh position={[0, y, 0.12]}>
       <sphereGeometry args={[0.1, 12, 12]} />
       <meshStandardMaterial
-        color={on ? color : "#3a3a3c"}
+        color={on ? color : "#8e8880"}
         emissive={on ? color : "#000000"}
-        emissiveIntensity={on ? 1.8 : 0}
+        emissiveIntensity={on ? 1.6 : 0}
       />
     </mesh>
   );
@@ -258,15 +303,15 @@ function SignalHead({
     <group position={position} rotation={[0, rotationY, 0]}>
       <mesh position={[0, 1.0, 0]}>
         <cylinderGeometry args={[0.04, 0.05, 2.0, 8]} />
-        <meshStandardMaterial color="#48484a" roughness={0.5} />
+        <meshStandardMaterial color="#8a8480" roughness={0.5} />
       </mesh>
       <mesh position={[0, 2.2, 0]}>
         <boxGeometry args={[0.28, 0.82, 0.22]} />
-        <meshStandardMaterial color="#1c1c1e" roughness={0.45} />
+        <meshStandardMaterial color="#4a4744" roughness={0.45} />
       </mesh>
       <group position={[0, 2.2, 0]}>
         {lens("#ff3b30", state === "red", 0.26)}
-        {lens("#ffcc00", state === "yellow", 0)}
+        {lens("#d4a017", state === "yellow", 0)}
         {lens("#34c759", state === "green", -0.26)}
       </group>
 
@@ -276,14 +321,14 @@ function SignalHead({
         distanceFactor={14}
         style={{ pointerEvents: "none", userSelect: "none" }}
       >
-        <div className="hologram-text text-center transition-opacity duration-500">
+        <div className="hologram-text min-w-[72px] text-center transition-opacity duration-500">
           <p
-            className="text-[10px] font-medium tracking-wide"
+            className="text-[10px] font-medium leading-tight"
             style={{ color: tone }}
           >
             {line1}
           </p>
-          <p className="text-[9px] tracking-wide text-[#3a3632]/75">{line2}</p>
+          <p className="text-[9px] leading-tight text-[#3a3632]/70">{line2}</p>
         </div>
       </Html>
     </group>
@@ -301,55 +346,36 @@ function Signals({ snapshot }: { snapshot: TrafficSnapshot }) {
   return (
     <group>
       {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
+        const axes = SIGNAL_NODES[id];
+        if (!axes) return null;
         const [nx, nz] = NODE_POS[id];
-        return APPROACHES.map(({ dx, dz, axis }, i) => {
-          const rx = -dz;
-          const rz = dx;
-          const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
-          const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
-          const state = lightFor(snapshot, id, axis);
-          const copy = signalCopy(snapshot, id, axis, state);
-          return (
-            <SignalHead
-              key={`${id}-${i}`}
-              position={[px, 0, pz]}
-              labelOffset={[0, 3.1, 0]}
-              rotationY={Math.atan2(-dx, -dz)}
-              state={state}
-              line1={copy.line1}
-              line2={copy.line2}
-              tone={copy.tone}
-            />
-          );
-        });
+
+        return APPROACHES.filter(({ axis }) => axes.includes(axis)).map(
+          ({ dx, dz, axis }, i) => {
+            const rx = -dz;
+            const rz = dx;
+            const px = nx - dx * (PAD + 0.35) + rx * (ROAD_W / 2 + 0.55);
+            const pz = nz - dz * (PAD + 0.35) + rz * (ROAD_W / 2 + 0.55);
+            const state = lightFor(snapshot, id, axis);
+            const copy = signalCopy(snapshot, axis, state);
+            return (
+              <SignalHead
+                key={`${id}-${i}-${axis}`}
+                position={[px, 0, pz]}
+                labelOffset={[0, 3.0, 0]}
+                rotationY={Math.atan2(-dx, -dz)}
+                state={state}
+                line1={copy.line1}
+                line2={copy.line2}
+                tone={copy.tone}
+              />
+            );
+          },
+        );
       })}
     </group>
   );
 }
-
-// ---------------------------------------------------------------- mode narrative
-
-function ModeNarrative({ mode }: { mode: SimMode }) {
-  const text =
-    mode === "fixed"
-      ? "Fixed timing \u2014 dense road stopped while nearly empty road has green"
-      : "Adaptive timing \u2014 green follows demand; traffic flows";
-
-  return (
-    <Html
-      position={[0, 5.5, 0]}
-      center
-      distanceFactor={18}
-      style={{ pointerEvents: "none", userSelect: "none" }}
-    >
-      <p className="hologram-text max-w-md text-center text-[11px] font-light tracking-wide text-[#3a3632]/80 transition-opacity duration-500">
-        {text}
-      </p>
-    </Html>
-  );
-}
-
-// ---------------------------------------------------------------- vehicles
 
 function CarBody({ truck }: { truck?: boolean }) {
   if (truck) {
@@ -387,7 +413,7 @@ function Wheels({ w, l }: { w: number; l: number }) {
       ].map(([x, z], i) => (
         <mesh key={i} position={[x, 0.16, z]} rotation={[0, 0, Math.PI / 2]}>
           <cylinderGeometry args={[0.16, 0.16, 0.14, 14]} />
-          <meshStandardMaterial color="#2c2c2e" roughness={0.7} />
+          <meshStandardMaterial color="#5c5752" roughness={0.7} />
         </mesh>
       ))}
     </group>
@@ -403,6 +429,7 @@ interface Corridor {
   len: number;
   stops: { dist: number; node: IntersectionId }[];
   road: RoadId;
+  active: boolean;
 }
 
 const STOP_BACK = PAD + 1.7;
@@ -413,6 +440,7 @@ function buildCorridors(): Corridor[] {
   for (const z of [-9, 9]) {
     const [n1, n2]: [IntersectionId, IntersectionId] =
       z < 0 ? ["A", "B"] : ["C", "D"];
+    const ewActive = z === ACTIVE_EW_Z;
     list.push({
       axis: "EW",
       sx: -H_EXTENT,
@@ -425,6 +453,7 @@ function buildCorridors(): Corridor[] {
         { dist: 14 + H_EXTENT - STOP_BACK, node: n2 },
       ],
       road: z < 0 ? "AB" : "CD",
+      active: ewActive,
     });
     list.push({
       axis: "EW",
@@ -438,12 +467,14 @@ function buildCorridors(): Corridor[] {
         { dist: H_EXTENT + 14 - STOP_BACK, node: n1 },
       ],
       road: z < 0 ? "BA" : "DC",
+      active: false,
     });
   }
 
   for (const x of [-14, 14]) {
     const [n1, n2]: [IntersectionId, IntersectionId] =
       x < 0 ? ["A", "C"] : ["B", "D"];
+    const nsActive = x === ACTIVE_NS_X;
     list.push({
       axis: "NS",
       sx: x,
@@ -456,6 +487,7 @@ function buildCorridors(): Corridor[] {
         { dist: 9 + V_EXTENT - STOP_BACK, node: n2 },
       ],
       road: x < 0 ? "AC" : "BD",
+      active: nsActive,
     });
     list.push({
       axis: "NS",
@@ -469,6 +501,7 @@ function buildCorridors(): Corridor[] {
         { dist: V_EXTENT + 9 - STOP_BACK, node: n1 },
       ],
       road: x < 0 ? "CA" : "DB",
+      active: false,
     });
   }
 
@@ -476,7 +509,6 @@ function buildCorridors(): Corridor[] {
 }
 
 const CORRIDORS = buildCorridors();
-const CARS_PER_CORRIDOR: Record<Axis, number> = { EW: 9, NS: 2 };
 const CAR_GAP = 3.2;
 
 interface CorridorCar {
@@ -490,21 +522,21 @@ interface CorridorCar {
 function createCorridorCars(): CorridorCar[] {
   const cars: CorridorCar[] = [];
   CORRIDORS.forEach((corridor, ci) => {
-    const count = CARS_PER_CORRIDOR[corridor.axis];
+    if (!corridor.active) return;
+    const count = corridor.axis === "EW" ? 9 : 2;
     for (let i = 0; i < count; i += 1) {
       cars.push({
         id: `c${ci}-${i}`,
         corridor: ci,
         d: (corridor.len / (count + 1)) * (i + 1),
         speed: 2.4 + Math.random() * 0.8,
-        type: Math.random() > 0.88 ? "truck" : "sedan",
+        type: "sedan",
       });
     }
   });
   return cars;
 }
 
-/** Nearest upcoming stop only — red/yellow halts before the line. */
 function stopLimit(
   carD: number,
   corridor: Corridor,
@@ -535,6 +567,8 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 
     for (let ci = 0; ci < CORRIDORS.length; ci += 1) {
       const corridor = CORRIDORS[ci];
+      if (!corridor.active) continue;
+
       const cars = carsRef.current
         .filter((c) => c.corridor === ci)
         .sort((a, b) => b.d - a.d);
@@ -589,21 +623,6 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
   );
 }
 
-// ---------------------------------------------------------------- camera
-
-function CameraRig() {
-  useFrame(({ camera, clock }) => {
-    const t = clock.elapsedTime * 0.04;
-    camera.position.x = Math.sin(t) * 0.8;
-    camera.position.y = 26 + Math.sin(t * 0.5) * 0.3;
-    camera.position.z = 22 + Math.cos(t) * 0.5;
-    camera.lookAt(0, 0, 0);
-  });
-  return null;
-}
-
-// ---------------------------------------------------------------- scene
-
 interface Scene3DProps {
   snapshot: TrafficSnapshot;
 }
@@ -611,32 +630,40 @@ interface Scene3DProps {
 export default function Scene3D({ snapshot }: Scene3DProps) {
   return (
     <Canvas
-      camera={{ position: [0, 26, 22], fov: 40, near: 0.1, far: 150 }}
+      camera={{ position: [0, 28, 24], fov: 42, near: 0.1, far: 150 }}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       className="h-full w-full"
     >
       <Suspense fallback={null}>
         <color attach="background" args={["#e8e4dc"]} />
-        <CameraRig />
 
-        <ambientLight intensity={0.65} color="#f5f0e8" />
+        <OrbitControls
+          enablePan
+          enableZoom
+          enableRotate
+          minDistance={18}
+          maxDistance={55}
+          maxPolarAngle={Math.PI / 2.15}
+          target={[0, 0, 0]}
+        />
+
+        <ambientLight intensity={0.7} color="#f5f0e8" />
         <directionalLight
           position={[12, 28, 8]}
-          intensity={1.35}
+          intensity={1.25}
           color="#fff8f0"
         />
         <directionalLight
           position={[-8, 16, -6]}
-          intensity={0.35}
+          intensity={0.3}
           color="#e8e4dc"
         />
-        <hemisphereLight args={["#f0ebe3", "#ede8df", 0.55]} />
+        <hemisphereLight args={["#f0ebe3", "#ede8df", 0.5]} />
 
         <Ground />
         <Roads />
         <Signals snapshot={snapshot} />
         <CarsLayer snapshot={snapshot} />
-        <ModeNarrative mode={snapshot.mode} />
       </Suspense>
     </Canvas>
   );

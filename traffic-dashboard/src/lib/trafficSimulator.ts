@@ -94,8 +94,7 @@ export function resetSimulation(mode: SimMode): TrafficSnapshot {
     {} as Record<IntersectionId, IntersectionData>,
   );
 
-  const reason =
-    mode === "fixed" ? "Fixed · equal split" : "Adaptive · heavy flow";
+  const reason = mode === "fixed" ? "Equal timer" : "Demand priority";
 
   return buildSnapshot(mode, intersections, roads, {
     activeAxis: "EW",
@@ -118,10 +117,8 @@ function reasonFor(
   phase: "green" | "yellow",
 ): string {
   if (phase === "yellow") return "Clearing";
-  if (mode === "fixed") return "Fixed · equal split";
-  return activeAxis === DENSE_AXIS
-    ? "Adaptive · heavy flow"
-    : "Adaptive · light flow";
+  if (mode === "fixed") return "Equal timer";
+  return activeAxis === DENSE_AXIS ? "Demand priority" : "Light flow";
 }
 
 function stepNetwork(mode: SimMode): {
@@ -228,7 +225,7 @@ export function createInitialSnapshot(): TrafficSnapshot {
     nsState: "red",
     greenDuration: FIXED_GREEN,
     remaining: FIXED_GREEN,
-    reason: "Fixed · equal split",
+    reason: "Equal timer",
   });
 }
 
