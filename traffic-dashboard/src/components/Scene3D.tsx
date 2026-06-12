@@ -510,6 +510,8 @@ function buildCorridors(): Corridor[] {
 
 const CORRIDORS = buildCorridors();
 const CAR_GAP = 3.2;
+/** Distance past the stop line before the car is treated as cleared. */
+const INTERSECTION_CLEAR = PAD + 0.8;
 
 interface CorridorCar {
   id: string;
@@ -543,9 +545,14 @@ function stopLimit(
   data: TrafficSnapshot,
 ): number | null {
   for (const stop of corridor.stops) {
-    if (carD >= stop.dist - CAR_NOSE) continue;
+    const line = stop.dist - CAR_NOSE;
+    // Only skip after the car has fully cleared this intersection.
+    if (carD > line + INTERSECTION_CLEAR) continue;
+
     const state = lightFor(data, stop.node, corridor.axis);
-    if (state !== "green") return stop.dist - CAR_NOSE;
+    if (state !== "green") return line;
+
+    // Nearest upcoming intersection is green — do not check further yet.
     return null;
   }
   return null;
@@ -575,21 +582,20 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 
       let ahead = Infinity;
       for (const car of cars) {
-        let limit = ahead - CAR_GAP;
+        let cap = ahead - CAR_GAP;
         const signalStop = stopLimit(car.d, corridor, data);
         if (signalStop !== null) {
-          limit = Math.min(limit, signalStop);
+          cap = Math.min(cap, signalStop);
         }
 
         const next = car.d + car.speed * dt;
-        car.d = Math.min(next, Math.max(car.d, limit));
+        car.d = Math.min(next, cap);
 
-        if (car.d >= corridor.len) {
-          car.d -= corridor.len;
-          ahead = car.d + corridor.len;
-        } else {
-          ahead = car.d;
+        if (car.d >= corridor.len - 1) {
+          car.d = 2;
         }
+
+        ahead = car.d;
 
         const group = groupRefs.current.get(car.id);
         if (group) {
