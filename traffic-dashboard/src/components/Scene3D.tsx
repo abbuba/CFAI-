@@ -548,11 +548,34 @@ function CarsLayer({ snapshot }: { snapshot: TrafficSnapshot }) {
 
 // ---------------------------------------------------------------- ambulance
 
-function Ambulance({ onRoadChange }: { onRoadChange: (road: RoadId) => void }) {
+/** Blue route highlight — one strip per remaining path segment. */
+function routeStripProps(roadId: RoadId) {
+  const g = roadGeom(roadId);
+  const horizontal = roadAxis(roadId) === "EW";
+  return {
+    position: [
+      g.sx + g.ux * (g.len / 2) + g.rx * LANE,
+      0.058,
+      g.sz + g.uz * (g.len / 2) + g.rz * LANE,
+    ] as [number, number, number],
+    args: (horizontal ? [g.len, 1.15] : [1.15, g.len]) as [number, number],
+  };
+}
+
+function Ambulance({
+  startSegment,
+  onRoadChange,
+  onComplete,
+}: {
+  startSegment: number;
+  onRoadChange: (road: RoadId) => void;
+  onComplete: () => void;
+}) {
   const groupRef = useRef<THREE.Group>(null);
   const corridorRef = useRef<THREE.Mesh>(null);
   const barRef = useRef<THREE.MeshStandardMaterial>(null);
-  const state = useRef({ progress: 0.3, segment: 0 });
+  const routeRefs = useRef<(THREE.Mesh | null)[]>([]);
+  const state = useRef({ progress: 0, segment: startSegment, traveled: 0 });
 
   useFrame(({ clock }, dt) => {
     const s = state.current;
@@ -562,9 +585,23 @@ function Ambulance({ onRoadChange }: { onRoadChange: (road: RoadId) => void }) {
     s.progress += (3.6 * Math.min(dt, 0.05)) / g.len;
     if (s.progress >= 1) {
       s.progress = 0;
+      s.traveled += 1;
+      if (s.traveled >= AMBULANCE_PATH.length) {
+        onComplete();
+        return;
+      }
       s.segment = (s.segment + 1) % AMBULANCE_PATH.length;
       onRoadChange(AMBULANCE_PATH[s.segment]);
     }
+
+    // Blue route lines stay visible only for the not-yet-driven segments.
+    routeRefs.current.forEach((mesh, i) => {
+      if (!mesh) return;
+      const k = (i - startSegment + AMBULANCE_PATH.length) % AMBULANCE_PATH.length;
+      mesh.visible = k >= s.traveled;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.22 + Math.sin(clock.elapsedTime * 4) * 0.07;
+    });
 
     const d = s.progress * g.len;
     if (groupRef.current) {
@@ -600,6 +637,24 @@ function Ambulance({ onRoadChange }: { onRoadChange: (road: RoadId) => void }) {
 
   return (
     <group>
+      {/* blue highlighted route */}
+      {AMBULANCE_PATH.map((roadId, i) => {
+        const strip = routeStripProps(roadId);
+        return (
+          <mesh
+            key={roadId}
+            ref={(node) => {
+              routeRefs.current[i] = node;
+            }}
+            position={strip.position}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <planeGeometry args={strip.args} />
+            <meshBasicMaterial color="#3b82f6" transparent opacity={0.25} />
+          </mesh>
+        );
+      })}
+
       <mesh ref={corridorRef} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[1, 1]} />
         <meshBasicMaterial color="#22c55e" transparent opacity={0.12} />
@@ -637,6 +692,8 @@ function NodeLabels({ snapshot }: { snapshot: TrafficSnapshot }) {
       {(["A", "B", "C", "D"] as IntersectionId[]).map((id) => {
         const [x, z] = NODE_POS[id];
         const info = snapshot.intersections[id];
+        const decision = snapshot.decisions.find((d) => d.id === id);
+        const emergency = snapshot.emergencyTarget === id;
         const dirX = x < 0 ? -1 : 1;
         const dirZ = z < 0 ? -1 : 1;
         return (
@@ -647,13 +704,24 @@ function NodeLabels({ snapshot }: { snapshot: TrafficSnapshot }) {
             distanceFactor={16}
             style={{ pointerEvents: "none", userSelect: "none" }}
           >
-            <div className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-1.5 text-center backdrop-blur-md">
+            <div
+              className={`rounded-xl border px-3 py-1.5 text-center backdrop-blur-md ${
+                emergency
+                  ? "border-blue-400/40 bg-blue-400/[0.12]"
+                  : "border-white/10 bg-white/[0.06]"
+              }`}
+            >
               <p className="text-[12px] font-semibold tracking-[0.2em] text-white/80">
                 {id}
               </p>
               <p className="font-mono text-[9px] text-white/40">
                 {info.vehicleCount} veh
               </p>
+              {decision && (
+                <p className="font-mono text-[9px] text-white/55">
+                  {decision.remaining}s
+                </p>
+              )}
             </div>
           </Html>
         );
@@ -677,12 +745,24 @@ function CameraRig() {
 
 // ---------------------------------------------------------------- scene
 
-interface Scene3DProps {
-  snapshot: TrafficSnapshot;
-  onAmbulanceRoad: (road: RoadId) => void;
+export interface AmbulanceSpawn {
+  id: number;
+  startSegment: number;
 }
 
-export default function Scene3D({ snapshot, onAmbulanceRoad }: Scene3DProps) {
+interface Scene3DProps {
+  snapshot: TrafficSnapshot;
+  ambulance: AmbulanceSpawn | null;
+  onAmbulanceRoad: (road: RoadId) => void;
+  onAmbulanceDone: () => void;
+}
+
+export default function Scene3D({
+  snapshot,
+  ambulance,
+  onAmbulanceRoad,
+  onAmbulanceDone,
+}: Scene3DProps) {
   return (
     <Canvas
       camera={{ position: [0, 24, 21], fov: 42, near: 0.1, far: 150 }}
@@ -703,7 +783,14 @@ export default function Scene3D({ snapshot, onAmbulanceRoad }: Scene3DProps) {
         <Roads snapshot={snapshot} />
         <Signals snapshot={snapshot} />
         <CarsLayer snapshot={snapshot} />
-        <Ambulance onRoadChange={onAmbulanceRoad} />
+        {ambulance && (
+          <Ambulance
+            key={ambulance.id}
+            startSegment={ambulance.startSegment}
+            onRoadChange={onAmbulanceRoad}
+            onComplete={onAmbulanceDone}
+          />
+        )}
         <NodeLabels snapshot={snapshot} />
       </Suspense>
     </Canvas>
